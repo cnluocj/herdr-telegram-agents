@@ -85,6 +85,19 @@ updated 21:35
 - `Dashboard in General` in `/options` → Sync (default on) switches it;
   off unpins and deletes the message.
 
+## Capturing working screens
+
+The daemon reads up to 400 recent lines from each working pane once a second
+and merges the snapshots into in-memory history. This keeps output available
+for `/screen all` and posts after it scrolls off the terminal. If Herdr refuses
+a recent read with `agent_not_idle`, the daemon retries once with the visible
+screen under the same read deadline. Other errors are not retried. A successful
+visible read is merged into the same history; when a later recent read includes
+older text, the daemon removes the overlap only when it can confirm the text is
+already in history. If continuity cannot be confirmed, the history keeps a gap
+marker rather than dropping uncertain lines. Successful fallbacks are logged
+at DEBUG without screen text; a final failed read produces one WARN.
+
 ## Questions and buttons
 
 - A blocked agent's screen is posted as a code block. When it ends in a

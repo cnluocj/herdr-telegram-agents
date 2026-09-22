@@ -18,6 +18,47 @@ No test touches the network or real time: the Herdr adapter talks to a fake
 NDJSON socket server, the Telegram adapter to an in-process HTTP fake, and
 anything that waits takes an injected clock.
 
+## Herdr capture compatibility (2026-09-23)
+
+An isolated macOS/arm64 sandbox used the official [Herdr 0.9.1 binary](https://github.com/herdrdev/herdr/releases/download/v0.9.1/herdr-macos-aarch64), SHA-256 `5fc7a7e7adfaca56fa80aa89dcb025693357268dab8285b9ce2d08a2313c89de`. Its socket protocol was 22; the installed baseline was Herdr 0.7.5, protocol 17. The sandbox used a temporary session and working directory, and was stopped and removed after the checks.
+
+The sandbox agent reported `working` immediately before the first two reads;
+it was checked as idle before the final read:
+
+| Read | Result |
+|------|--------|
+| `agent.read --source recent --lines 400` | Exit 1, API code `agent_not_idle`, zero text lines |
+| `agent.read --source visible --lines 400` | Exit 0, 40 text lines |
+| `agent.read --source recent --lines 400` after the agent became idle | Exit 0, 40 text lines |
+
+The refusal message said that alternate-screen history could be captured only
+while idle and suggested `--source visible`. The 0.7.5 and 0.9.1 schemas were
+compared for all 15 socket methods and the global/per-pane events this plugin
+uses. Their used request, response, and event fields matched; protocol 22 adds
+capability fields ignored by the plugin and an unused `workspace.reordered`
+event. The compatibility claim is limited to those used contracts.
+
+The regression test exercised `recent L1–L20 → visible L4–L24 → recent
+L1–L28`; the resulting history had no gap marker or duplicate lines. An older
+prefix that is not confirmed in committed history still produces a gap marker.
+The final gates passed on 2026-09-23: `gofmt`, `make lint` (including `go vet`,
+staticcheck, import checks and all five cross-build targets), and `make test`
+(`go test -race ./...`).
+
+- [ ] **Default-session live check (partial, 2026-09-23):** `herdr update
+  --handoff` installed Herdr 0.9.1/protocol 22 (installed binary SHA-256
+  matches the sandbox asset) and reported `live handoff complete`. All 32 pane
+  IDs and seven agents remained; the active Codex pane kept shell PID 5283 and
+  process PID 77380. The plugin daemon stayed at PID 95311 as the only daemon,
+  and status reported `herdr=ok`, `agents=7`, `pager=on`. A read-only recent
+  read of the already-working Codex pane exited 0. From handoff through
+  2026-09-23 01:36:14 +05, logs contained no `agent_not_idle` or protocol
+  mismatch warnings. One capture read failed with `server_unavailable` while
+  the old server shut down, followed by one stream reset and one `screen
+  history gap` warning. The agent remained working through a 30-second
+  read-only wait, so a natural work/idle history transition is still pending;
+  no test prompt or keys were sent.
+
 ## Install from a release
 
 `scripts/verify-install.sh <version> [linux|macos|all]` replays what
