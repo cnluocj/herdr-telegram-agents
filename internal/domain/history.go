@@ -56,9 +56,32 @@ func NewHistory() *History {
 // as the tail and not committed yet.
 func (h *History) Append(lines []string) (added, shift int, gap bool) {
 	stable, tail := splitLive(lines)
+	return h.appendSnapshot(stable, tail, false)
+}
+
+// AppendRecentAfterVisible merges a recent-screen snapshot after a visible
+// snapshot. Recent may include older scrollback before the visible screen,
+// so it can safely reuse that prefix only when the prefix through the prior
+// stable screen is already the end of committed history. If that proof or a
+// three-line nonblank anchor is missing, it uses Append's ordinary gap path.
+func (h *History) AppendRecentAfterVisible(lines []string) (added, shift int, gap bool) {
+	stable, tail := splitLive(lines)
+	return h.appendSnapshot(stable, tail, true)
+}
+
+func (h *History) appendSnapshot(stable, tail []string, allowRecentPrefix bool) (added, shift int, gap bool) {
 	h.tail = append([]string(nil), tail...)
 	if len(stable) == 0 {
 		return 0, 0, false
+	}
+	if allowRecentPrefix {
+		if end, ok := h.recentPrefixEnd(stable); ok {
+			h.commit(stable[end:])
+			h.prev = append([]string(nil), stable...)
+			h.trim()
+			added = len(stable) - end
+			return added, added, false
+		}
 	}
 	defer func() {
 		h.prev = append([]string(nil), stable...)
@@ -90,6 +113,60 @@ func (h *History) Append(lines []string) (added, shift int, gap bool) {
 	h.commit([]string{HistoryGapMarker})
 	h.commit(stable)
 	return len(stable), len(h.prev), true
+}
+
+// recentPrefixEnd finds an exact previous stable suffix inside stable, after
+// an older prefix, and verifies that everything through the overlap is
+// already represented at the end of committed history.
+func (h *History) recentPrefixEnd(stable []string) (int, bool) {
+	for offset := 1; offset < len(stable); offset++ {
+		for shift := 0; shift < len(h.prev); shift++ {
+			overlap := h.prev[shift:]
+			if len(overlap) > len(stable)-offset {
+				continue
+			}
+			end := offset + len(overlap)
+			candidate := stable[offset:end]
+			if !hasThreeEqualNonblankAnchors(overlap, candidate) || !equalLines(overlap, candidate) {
+				continue
+			}
+			prefix := stable[:end]
+			if len(prefix) > len(h.committed) || !equalLines(h.committed[len(h.committed)-len(prefix):], prefix) {
+				continue
+			}
+			return end, true
+		}
+	}
+	return 0, false
+}
+
+func hasThreeEqualNonblankAnchors(a, b []string) bool {
+	window := len(a)
+	if window > HistoryAnchorWindow {
+		window = HistoryAnchorWindow
+	}
+	if len(b) < window {
+		window = len(b)
+	}
+	hits := 0
+	for i := 0; i < window; i++ {
+		if strings.TrimSpace(a[i]) != "" && a[i] == b[i] {
+			hits++
+		}
+	}
+	return hits >= HistoryAnchorLines
+}
+
+func equalLines(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Mark records that a human message starts here: everything committed so

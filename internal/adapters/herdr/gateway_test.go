@@ -332,6 +332,39 @@ func TestGatewayNotFoundIsAgentGone(t *testing.T) {
 	}
 }
 
+func TestGatewayAgentNotIdleMapsBusyAndPreservesAPIError(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	apiMessage := "cannot read history while working"
+	apiCode := codeNotIdle
+	s.Handle("agent.read", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return nil, &testkit.APIError{Code: apiCode, Message: apiMessage}
+	})
+	g := newGateway(t, s)
+
+	_, err := g.ReadScreen(ctxT(t), "w1:p1", domain.ScreenRecent, 400)
+	if !errors.Is(err, domain.ErrAgentBusy) {
+		t.Fatalf("err = %v, want ErrAgentBusy", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != codeNotIdle || apiErr.Message != apiMessage {
+		t.Fatalf("err = %v, want APIError %s with original message", err, codeNotIdle)
+	}
+	want := "herdr agent.read: agent is busy: herdr api agent_not_idle: " + apiMessage
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err, want)
+	}
+
+	apiCode = "invalid_params"
+	_, err = g.ReadScreen(ctxT(t), "w1:p1", domain.ScreenRecent, 400)
+	if errors.Is(err, domain.ErrAgentBusy) {
+		t.Fatalf("nonmatching code mapped to ErrAgentBusy: %v", err)
+	}
+	apiErr = nil
+	if !errors.As(err, &apiErr) || apiErr.Code != "invalid_params" || apiErr.Message != apiMessage {
+		t.Fatalf("err = %v, want unchanged invalid_params APIError", err)
+	}
+}
+
 func TestGatewayRetriesDialOnce(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.prompt", ackHandler)

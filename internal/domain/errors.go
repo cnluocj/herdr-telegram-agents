@@ -13,6 +13,9 @@ var (
 	ErrNotConfigured = errors.New("plugin is not configured")
 	// ErrAgentGone means Herdr no longer knows the targeted agent or pane.
 	ErrAgentGone = errors.New("agent is gone")
+	// ErrAgentBusy means Herdr cannot read alternate-screen history while
+	// the targeted agent is working.
+	ErrAgentBusy = errors.New("agent is busy")
 	// ErrTopicGone means the Telegram topic was deleted.
 	ErrTopicGone = errors.New("topic is gone")
 	// ErrTopicClosed means the Telegram topic is closed and rejects writes.

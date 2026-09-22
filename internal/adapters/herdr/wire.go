@@ -1,5 +1,5 @@
-// Package herdr adapts the Herdr socket API (newline-delimited JSON,
-// protocol 17) to the domain.HerdrGateway port.
+// Package herdr adapts verified Herdr socket protocols 17 and 22
+// (newline-delimited JSON) to the domain.HerdrGateway port.
 package herdr
 
 import (
@@ -10,12 +10,24 @@ import (
 	"github.com/permgps/herdr-telegram-agents/internal/domain"
 )
 
-// protocolVersion is the socket protocol this adapter was written against.
-const protocolVersion = 17
+// supportedProtocols lists the socket protocol versions whose used schemas
+// have been verified against this adapter.
+var supportedProtocols = [...]int{17, 22}
 
-// ProtocolVersion is protocolVersion for the doctor, which reports a
-// mismatch as a warning.
-const ProtocolVersion = protocolVersion
+// SupportedProtocolVersions returns the protocol versions verified against
+// this adapter. The returned slice is independent of the package's list.
+func SupportedProtocolVersions() []int {
+	return append([]int(nil), supportedProtocols[:]...)
+}
+
+func supportsProtocol(protocol int) bool {
+	for _, supported := range supportedProtocols {
+		if protocol == supported {
+			return true
+		}
+	}
+	return false
+}
 
 type request struct {
 	ID     string `json:"id"`
@@ -39,8 +51,9 @@ type eventEnvelope struct {
 	Data  json.RawMessage `json:"data"`
 }
 
-// agentInfo mirrors the AgentInfo schema of protocol 17. Optional fields
-// are pointers or zero values; the adapter never relies on their presence.
+// agentInfo mirrors the AgentInfo fields used by the adapter in the verified
+// protocol schemas. Optional fields are pointers or zero values; the adapter
+// never relies on their presence.
 type agentInfo struct {
 	PaneID                 string  `json:"pane_id"`
 	WorkspaceID            string  `json:"workspace_id"`

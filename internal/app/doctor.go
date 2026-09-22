@@ -33,12 +33,12 @@ type Doctor struct {
 	// Inspector builds the light Telegram client from the loaded config.
 	Inspector func(cfg domain.Config) (domain.TelegramInspector, error)
 	Herdr     domain.HerdrProber
-	// ExpectedProtocol is the socket protocol the adapter was written for.
-	ExpectedProtocol int
-	Choices          domain.ChoiceSource
-	Timeout          time.Duration
-	Clock            domain.Clock
-	Log              *slog.Logger
+	// SupportedProtocols are the socket protocols verified by the adapter.
+	SupportedProtocols []int
+	Choices            domain.ChoiceSource
+	Timeout            time.Duration
+	Clock              domain.Clock
+	Log                *slog.Logger
 }
 
 // Run performs every check and returns them in report order.
@@ -217,10 +217,19 @@ func (d *Doctor) checkHerdr(ctx context.Context) domain.Check {
 		return domain.Check{Name: "herdr", Level: domain.CheckFail, Detail: "socket not answering: " + failureReason(err)}
 	}
 	detail := fmt.Sprintf("version %s, protocol %d", info.Version, info.Protocol)
-	if d.ExpectedProtocol != 0 && info.Protocol != d.ExpectedProtocol {
-		return domain.Check{Name: "herdr", Level: domain.CheckWarn, Detail: fmt.Sprintf("%s (plugin built for %d)", detail, d.ExpectedProtocol)}
+	if len(d.SupportedProtocols) > 0 && !containsProtocol(d.SupportedProtocols, info.Protocol) {
+		return domain.Check{Name: "herdr", Level: domain.CheckWarn, Detail: fmt.Sprintf("%s (supported protocols: %v)", detail, d.SupportedProtocols)}
 	}
 	return domain.Check{Name: "herdr", Level: domain.CheckOK, Detail: detail}
+}
+
+func containsProtocol(protocols []int, protocol int) bool {
+	for _, supported := range protocols {
+		if supported == protocol {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Doctor) checkDaemon(ctx context.Context) domain.Check {

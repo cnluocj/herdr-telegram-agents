@@ -6,6 +6,10 @@ import "fmt"
 // workspace target; the gateway maps it to domain.ErrAgentGone.
 const codeNotFound = "not_found"
 
+// codeNotIdle is returned when alternate-screen history is requested while
+// an agent is working.
+const codeNotIdle = "agent_not_idle"
+
 // APIError is an error line returned by the Herdr server for a request.
 // Codes are Herdr's snake_case identifiers such as "not_found".
 type APIError struct {

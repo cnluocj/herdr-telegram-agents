@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,10 +64,10 @@ func newDoctor(t *testing.T) *doctorFixture {
 			}
 			return f.insp, nil
 		},
-		Herdr:            f.herdr,
-		ExpectedProtocol: 17,
-		Timeout:          50 * time.Millisecond,
-		Clock:            f.clock,
+		Herdr:              f.herdr,
+		SupportedProtocols: []int{17, 22},
+		Timeout:            50 * time.Millisecond,
+		Clock:              f.clock,
 	}
 	return f
 }
@@ -166,12 +167,25 @@ func TestDoctorFailures(t *testing.T) {
 			t.Errorf("group = %+v", c)
 		}
 	})
-	t.Run("protocol mismatch warns", func(t *testing.T) {
+	t.Run("protocol 22 is supported", func(t *testing.T) {
 		f := newDoctor(t)
-		f.herdr.SetPing(domain.HerdrInfo{Version: "0.9.0", Protocol: 16})
+		f.herdr.SetPing(domain.HerdrInfo{Version: "0.9.1", Protocol: 22})
 		c := check(t, f.doc.Run(context.Background()), "herdr")
-		if c.Level != domain.CheckWarn || c.Detail != "version 0.9.0, protocol 16 (plugin built for 17)" {
+		if c.Level != domain.CheckOK || c.Detail != "version 0.9.1, protocol 22" {
 			t.Errorf("herdr = %+v", c)
+		}
+	})
+	t.Run("unverified protocols warn", func(t *testing.T) {
+		for _, protocol := range []int{18, 21, 23} {
+			t.Run(strconv.Itoa(protocol), func(t *testing.T) {
+				f := newDoctor(t)
+				f.herdr.SetPing(domain.HerdrInfo{Version: "0.9.x", Protocol: protocol})
+				c := check(t, f.doc.Run(context.Background()), "herdr")
+				want := "version 0.9.x, protocol " + strconv.Itoa(protocol) + " (supported protocols: [17 22])"
+				if c.Level != domain.CheckWarn || c.Detail != want {
+					t.Errorf("herdr = %+v, want warning %q", c, want)
+				}
+			})
 		}
 	})
 	t.Run("socket dead", func(t *testing.T) {

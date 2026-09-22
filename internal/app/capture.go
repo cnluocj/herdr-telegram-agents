@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -25,7 +27,8 @@ type Capture struct {
 
 	mu     sync.Mutex
 	hist   map[domain.Key]*domain.History
-	last   map[domain.Key]string // SHA-256 of the last screen merged per key
+	last   map[domain.Key]string              // SHA-256 of the last screen merged per key
+	source map[domain.Key]domain.ScreenSource // last successful read source per key
 	status map[domain.Key]domain.Status
 	left   map[domain.Key]time.Time // when the agent last left working
 
@@ -52,6 +55,7 @@ func NewCapture(herdr domain.HerdrGateway, live func() []domain.Agent, clock dom
 		log:         log,
 		hist:        map[domain.Key]*domain.History{},
 		last:        map[domain.Key]string{},
+		source:      map[domain.Key]domain.ScreenSource{},
 		status:      map[domain.Key]domain.Status{},
 		left:        map[domain.Key]time.Time{},
 		Interval:    captureInterval,
@@ -72,6 +76,7 @@ func (c *Capture) Observe(ev AgentEvent) {
 	if ev.Kind == AgentGone {
 		delete(c.hist, key)
 		delete(c.last, key)
+		delete(c.source, key)
 		delete(c.status, key)
 		delete(c.left, key)
 		c.log.Debug("history dropped", slog.String("key", key.String()))
@@ -144,40 +149,66 @@ func (c *Capture) inGrace(key domain.Key, now time.Time) bool {
 // capture reads one screen and merges it. Read failures are logged and left
 // to the next tick.
 func (c *Capture) capture(ctx context.Context, key domain.Key) {
-	screen, err := c.read(ctx, key)
+	screen, source, err := c.read(ctx, key)
 	if err != nil {
 		c.log.Warn("capture read failed", slog.String("key", key.String()), slog.String("err", err.Error()))
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.merge(key, screen)
+	c.merge(key, screen, source)
 }
 
-func (c *Capture) read(ctx context.Context, key domain.Key) (domain.Screen, error) {
+func (c *Capture) read(ctx context.Context, key domain.Key) (domain.Screen, domain.ScreenSource, error) {
 	rctx, cancel := context.WithTimeout(ctx, c.ReadTimeout)
 	defer cancel()
-	return c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenRecent, captureLines)
+	screen, err := c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenRecent, captureLines)
+	if err == nil {
+		return screen, domain.ScreenRecent, nil
+	}
+	if !errors.Is(err, domain.ErrAgentBusy) || rctx.Err() != nil {
+		return domain.Screen{}, "", err
+	}
+
+	visible, visibleErr := c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenVisible, captureLines)
+	if visibleErr != nil {
+		return domain.Screen{}, "", fmt.Errorf("recent screen read failed: %w; visible fallback failed: %w", err, visibleErr)
+	}
+	c.log.Debug("capture used visible screen fallback",
+		slog.String("key", key.String()),
+		slog.String("err", err.Error()))
+	return visible, domain.ScreenVisible, nil
 }
 
 // merge appends the screen to the key's history unless it equals the last
 // merged one. Herdr 0.7.5 reports revision 0 for agent.read, so the text
 // hash, not the revision, decides. The caller holds the lock.
-func (c *Capture) merge(key domain.Key, screen domain.Screen) *domain.History {
+func (c *Capture) merge(key domain.Key, screen domain.Screen, source domain.ScreenSource) *domain.History {
 	h := c.history(key)
+	previousSource := c.source[key]
+	c.source[key] = source
 	hash := hashText(screen.Text)
 	if c.last[key] == hash {
-		c.log.Debug("screen unchanged", slog.String("key", key.String()), slog.Int("committed", h.Len()))
+		c.log.Debug("screen unchanged", slog.String("key", key.String()),
+			slog.String("source", string(source)), slog.Int("committed", h.Len()))
 		return h
 	}
-	added, shift, gap := h.Append(screenLines(screen.Text))
+	var added, shift int
+	var gap bool
+	if previousSource == domain.ScreenVisible && source == domain.ScreenRecent {
+		added, shift, gap = h.AppendRecentAfterVisible(screenLines(screen.Text))
+	} else {
+		added, shift, gap = h.Append(screenLines(screen.Text))
+	}
 	c.last[key] = hash
 	if gap {
 		c.log.Warn("screen history gap", slog.String("key", key.String()),
-			slog.Int64("revision", screen.Revision), slog.Int("added", added), slog.Int("committed", h.Len()))
+			slog.String("source", string(source)), slog.Int64("revision", screen.Revision),
+			slog.Int("added", added), slog.Int("committed", h.Len()))
 		return h
 	}
-	c.log.Debug("screen captured", slog.String("key", key.String()), slog.Int64("revision", screen.Revision),
+	c.log.Debug("screen captured", slog.String("key", key.String()), slog.String("source", string(source)),
+		slog.Int64("revision", screen.Revision),
 		slog.Int("added", added), slog.Int("shift", shift), slog.Int("committed", h.Len()), slog.Bool("truncated", screen.Truncated))
 	return h
 }
@@ -185,15 +216,16 @@ func (c *Capture) merge(key domain.Key, screen domain.Screen) *domain.History {
 // Since reads a fresh screen, merges it and returns the history lines after
 // the last mark (all of them when there is none) and whether a mark exists.
 func (c *Capture) Since(ctx context.Context, key domain.Key) (lines []string, marked bool, err error) {
-	screen, err := c.read(ctx, key)
+	screen, source, err := c.read(ctx, key)
 	if err != nil {
 		return nil, false, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	h := c.merge(key, screen)
+	h := c.merge(key, screen, source)
 	lines = h.Lines()
-	c.log.Debug("history read", slog.String("key", key.String()), slog.Int("lines", len(lines)), slog.Bool("marked", h.Marked()))
+	c.log.Debug("history read", slog.String("key", key.String()), slog.String("source", string(source)),
+		slog.Int("lines", len(lines)), slog.Bool("marked", h.Marked()))
 	return lines, h.Marked(), nil
 }
 

@@ -64,6 +64,47 @@ func TestHistoryScrollAppendsNewLines(t *testing.T) {
 	}
 }
 
+func TestHistoryRecentAfterVisibleReusesOnlyCommittedOlderPrefix(t *testing.T) {
+	h := domain.NewHistory()
+	h.Append(screen(1, 20))
+	h.Append(screen(4, 24))
+	added, shift, gap := h.AppendRecentAfterVisible(screen(1, 28))
+	if added != 4 || shift != 4 || gap {
+		t.Fatalf("AppendRecentAfterVisible = (%d, %d, %v), want (4, 4, false)", added, shift, gap)
+	}
+	if got, want := h.Lines(), screen(1, 28); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Lines after visible → recent = %v\nwant %v", got, want)
+	}
+}
+
+func TestHistoryRecentAfterVisibleKeepsGapWhenOlderPrefixIsNotCommitted(t *testing.T) {
+	h := domain.NewHistory()
+	h.Append(screen(1, 20))
+	h.Append(screen(4, 24))
+	_, _, gap := h.AppendRecentAfterVisible(screen(0, 28))
+	if !gap {
+		t.Fatal("an uncommitted older prefix must not be discarded")
+	}
+	if got := h.Lines(); !strings.Contains(strings.Join(got, "\n"), domain.HistoryGapMarker) {
+		t.Fatalf("Lines = %v, want a gap marker", got)
+	}
+}
+
+func TestHistoryRecentAfterVisibleRequiresThreeNonblankAnchors(t *testing.T) {
+	first := make([]string, 20)
+	first[3], first[4] = "A", "B"
+	visible := append(append([]string(nil), first[3:]...), "", "", "", "")
+	recent := append(append([]string(nil), first...), "", "", "", "", "", "", "", "")
+
+	h := domain.NewHistory()
+	h.Append(first)
+	h.Append(visible)
+	_, _, gap := h.AppendRecentAfterVisible(recent)
+	if !gap {
+		t.Fatal("two matching nonblank lines must not authorize discarding the older prefix")
+	}
+}
+
 func TestHistoryInPlaceRewriteIsRefreshed(t *testing.T) {
 	h := domain.NewHistory()
 	h.Append(screen(1, 20))

@@ -1,10 +1,13 @@
 package herdr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +34,51 @@ func TestCallSuccessAndPing(t *testing.T) {
 	}
 	if reqs := s.Requests(); len(reqs) != 1 || !strings.HasPrefix(reqs[0].ID, "r") {
 		t.Fatalf("requests = %+v", reqs)
+	}
+}
+
+func TestPingWarnsOnlyForUnverifiedProtocols(t *testing.T) {
+	tests := []struct {
+		protocol int
+		warn     bool
+	}{
+		{protocol: 17},
+		{protocol: 22},
+		{protocol: 18, warn: true},
+		{protocol: 21, warn: true},
+		{protocol: 23, warn: true},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprint(tt.protocol), func(t *testing.T) {
+			s := testkit.NewNDJSONServer(t, nil)
+			s.Handle("ping", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+				return map[string]any{"type": "pong", "version": "test", "protocol": tt.protocol}, nil
+			})
+			var logs bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&logs, nil))
+			pong, err := ping(context.Background(), dial, s.Path(), log)
+			if err != nil || pong.Protocol != tt.protocol {
+				t.Fatalf("ping = %+v, %v", pong, err)
+			}
+			gotWarning := strings.Contains(logs.String(), "herdr protocol mismatch")
+			if gotWarning != tt.warn {
+				t.Fatalf("warning = %v, logs %q", gotWarning, logs.String())
+			}
+			if tt.warn && (!strings.Contains(logs.String(), fmt.Sprintf("got=%d", tt.protocol)) || !strings.Contains(logs.String(), `supported="[17 22]"`)) {
+				t.Fatalf("mismatch log does not include protocol and supported set: %q", logs.String())
+			}
+		})
+	}
+}
+
+func TestSupportedProtocolVersionsReturnsCopy(t *testing.T) {
+	versions := SupportedProtocolVersions()
+	if want := []int{17, 22}; !reflect.DeepEqual(versions, want) {
+		t.Fatalf("SupportedProtocolVersions = %v, want %v", versions, want)
+	}
+	versions[0] = 99
+	if got, want := SupportedProtocolVersions(), []int{17, 22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mutating returned slice changed supported versions: %v", got)
 	}
 }
 

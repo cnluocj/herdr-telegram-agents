@@ -89,10 +89,10 @@ func BuildDoctor(env PluginEnv, version string, log *slog.Logger) *Doctor {
 		Inspector: func(cfg domain.Config) (domain.TelegramInspector, error) {
 			return BuildInspector(cfg, log)
 		},
-		Herdr:            herdr.NewGateway(env.SocketPath, log, herdr.DefaultBackoff),
-		ExpectedProtocol: herdr.ProtocolVersion,
-		Clock:            realClock{},
-		Log:              log,
+		Herdr:              herdr.NewGateway(env.SocketPath, log, herdr.DefaultBackoff),
+		SupportedProtocols: herdr.SupportedProtocolVersions(),
+		Clock:              realClock{},
+		Log:                log,
 	}
 }
 

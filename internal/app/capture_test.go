@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +22,48 @@ type captureFixture struct {
 	agents  map[domain.Key]domain.Agent
 	capture *Capture
 	ctx     context.Context
+	logs    *recordHandler
+}
+
+type scriptedRead struct {
+	source domain.ScreenSource
+	screen domain.Screen
+	err    error
+	after  func()
+}
+
+// scriptedHerdr lets capture tests choose a response for each source while
+// retaining FakeHerdr for the other gateway methods.
+type scriptedHerdr struct {
+	*testkit.FakeHerdr
+	mu    sync.Mutex
+	steps []scriptedRead
+	reads []testkit.ReadCall
+}
+
+func (h *scriptedHerdr) ReadScreen(ctx context.Context, target string, source domain.ScreenSource, lines int) (domain.Screen, error) {
+	h.mu.Lock()
+	h.reads = append(h.reads, testkit.ReadCall{Target: target, Source: source, Lines: lines})
+	if len(h.steps) == 0 {
+		h.mu.Unlock()
+		return h.FakeHerdr.ReadScreen(ctx, target, source, lines)
+	}
+	step := h.steps[0]
+	h.steps = h.steps[1:]
+	h.mu.Unlock()
+	if step.source != source {
+		return domain.Screen{}, fmt.Errorf("script expected %s read, got %s", step.source, source)
+	}
+	if step.after != nil {
+		step.after()
+	}
+	return step.screen, step.err
+}
+
+func (h *scriptedHerdr) Reads() []testkit.ReadCall {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]testkit.ReadCall(nil), h.reads...)
 }
 
 func newCaptureFixture(t *testing.T) *captureFixture {
@@ -28,6 +73,7 @@ func newCaptureFixture(t *testing.T) *captureFixture {
 		clock:  testkit.NewFakeClock(tb0),
 		agents: map[domain.Key]domain.Agent{},
 		ctx:    context.Background(),
+		logs:   &recordHandler{},
 	}
 	live := func() []domain.Agent {
 		var out []domain.Agent
@@ -36,8 +82,14 @@ func newCaptureFixture(t *testing.T) *captureFixture {
 		}
 		return out
 	}
-	f.capture = NewCapture(f.herdr, live, f.clock, nil)
+	f.capture = NewCapture(f.herdr, live, f.clock, slog.New(f.logs))
 	return f
+}
+
+func (f *captureFixture) scriptReads(steps ...scriptedRead) *scriptedHerdr {
+	h := &scriptedHerdr{FakeHerdr: f.herdr, steps: append([]scriptedRead(nil), steps...)}
+	f.capture.herdr = h
+	return h
 }
 
 func (f *captureFixture) agent(pane string, st domain.Status) domain.Agent {
@@ -91,6 +143,169 @@ func TestCaptureTickReadsWorkingAgentsOnly(t *testing.T) {
 	if want := screenLines(text(1, 24)); !reflect.DeepEqual(lines, want) {
 		t.Fatalf("Since lines = %v\nwant %v", lines, want)
 	}
+}
+
+func TestCaptureVisibleThenRecentWithOlderPrefixKeepsHistoryContinuous(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 20)}},
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(4, 24)}},
+		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 28)}},
+	)
+
+	for range 3 {
+		f.capture.tick(f.ctx)
+	}
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+	if got, want := f.capture.hist[a.Key].Lines(), screenLines(text(1, 28)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("history after visible → recent = %v\nwant %v", got, want)
+	}
+	if got := f.logs.count(slog.LevelDebug, "capture used visible screen fallback"); got != 1 {
+		t.Fatalf("visible fallback DEBUG records = %d, want 1", got)
+	}
+	if got := f.logs.count(slog.LevelWarn, "capture read failed"); got != 0 {
+		t.Fatalf("capture read WARN records after fallback success = %d, want 0", got)
+	}
+}
+
+func TestCaptureSinceUsesVisibleFallback(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+	)
+
+	lines, marked, err := f.capture.Since(f.ctx, a.Key)
+	if err != nil || marked {
+		t.Fatalf("Since = (%v, %v, %v), want visible lines, unmarked, nil", lines, marked, err)
+	}
+	if want := screenLines(text(1, 20)); !reflect.DeepEqual(lines, want) {
+		t.Fatalf("Since lines = %v\nwant %v", lines, want)
+	}
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+	if got := f.logs.count(slog.LevelDebug, "capture used visible screen fallback"); got != 1 {
+		t.Fatalf("visible fallback DEBUG records = %d, want 1", got)
+	}
+}
+
+func TestCaptureUpdatesSourceWhenRecentScreenIsUnchanged(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 20)}},
+	)
+	f.capture.tick(f.ctx)
+	f.capture.tick(f.ctx)
+
+	if got := f.capture.source[a.Key]; got != domain.ScreenRecent {
+		t.Fatalf("last source = %q, want %q after unchanged recent read", got, domain.ScreenRecent)
+	}
+	if got, want := f.capture.hist[a.Key].Lines(), screenLines(text(1, 20)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("history after unchanged recent read = %v\nwant %v", got, want)
+	}
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+}
+
+func TestCaptureVisibleFallbackFailureWarnsOnceAndReturnsBothErrors(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	recentErr := fmt.Errorf("%w: alternate-screen capture unavailable", domain.ErrAgentBusy)
+	visibleErr := fmt.Errorf("%w: pane closed during read", domain.ErrDisconnected)
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: recentErr},
+		scriptedRead{source: domain.ScreenVisible, err: visibleErr},
+	)
+	f.capture.tick(f.ctx)
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+	if got := f.logs.count(slog.LevelWarn, "capture read failed"); got != 1 {
+		t.Fatalf("capture read WARN records = %d, want 1", got)
+	}
+	if _, ok := f.capture.hist[a.Key]; ok {
+		t.Fatal("failed reads must not create or mutate history")
+	}
+
+	h = f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: recentErr},
+		scriptedRead{source: domain.ScreenVisible, err: visibleErr},
+	)
+	_, _, err := f.capture.Since(f.ctx, a.Key)
+	if !errors.Is(err, domain.ErrAgentBusy) || !errors.Is(err, domain.ErrDisconnected) {
+		t.Fatalf("Since error = %v, want both original and fallback causes", err)
+	}
+	for _, detail := range []string{"recent screen read failed", "alternate-screen capture unavailable", "visible fallback failed", "pane closed during read"} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Errorf("Since error %q does not contain %q", err, detail)
+		}
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Since Reads = %+v\nwant %+v", got, wantCalls)
+	}
+}
+
+func TestCaptureDoesNotRetryUnrelatedOrCancelledReads(t *testing.T) {
+	t.Run("unrelated error", func(t *testing.T) {
+		f := newCaptureFixture(t)
+		a := f.agent("p1", domain.StatusWorking)
+		h := f.scriptReads(scriptedRead{source: domain.ScreenRecent, err: domain.ErrDisconnected})
+		f.capture.tick(f.ctx)
+		want := []testkit.ReadCall{{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines}}
+		if got := h.Reads(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Reads = %+v\nwant %+v", got, want)
+		}
+		if _, ok := f.capture.hist[a.Key]; ok {
+			t.Fatal("unrelated read error must not create history")
+		}
+	})
+
+	t.Run("cancelled after busy response", func(t *testing.T) {
+		f := newCaptureFixture(t)
+		a := f.agent("p1", domain.StatusWorking)
+		ctx, cancel := context.WithCancel(f.ctx)
+		h := f.scriptReads(scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy, after: cancel})
+		f.capture.tick(ctx)
+		want := []testkit.ReadCall{{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines}}
+		if got := h.Reads(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("Reads = %+v\nwant %+v", got, want)
+		}
+		if _, ok := f.capture.hist[a.Key]; ok {
+			t.Fatal("cancelled read must not create history")
+		}
+		if got := f.logs.count(slog.LevelWarn, "capture read failed"); got != 1 {
+			t.Fatalf("capture read WARN records = %d, want 1", got)
+		}
+	})
 }
 
 func TestCaptureRunFiresOnClock(t *testing.T) {
@@ -186,8 +401,8 @@ func TestCaptureGoneDropsHistory(t *testing.T) {
 	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: a})
 	f.capture.tick(f.ctx)
 	f.capture.Observe(AgentEvent{Kind: AgentGone, Agent: a})
-	if len(f.capture.hist) != 0 || len(f.capture.status) != 0 || len(f.capture.last) != 0 {
-		t.Fatalf("state after gone: hist %d status %d last %d", len(f.capture.hist), len(f.capture.status), len(f.capture.last))
+	if len(f.capture.hist) != 0 || len(f.capture.status) != 0 || len(f.capture.last) != 0 || len(f.capture.source) != 0 {
+		t.Fatalf("state after gone: hist %d status %d last %d source %d", len(f.capture.hist), len(f.capture.status), len(f.capture.last), len(f.capture.source))
 	}
 	f.herdr.SetScreen("p1", text(50, 69))
 	lines, marked, err := f.capture.Since(f.ctx, a.Key)

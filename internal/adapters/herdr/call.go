@@ -116,17 +116,17 @@ func ctxErr(ctx context.Context, method string, err error) error {
 	return err
 }
 
-// ping checks the server and warns when the protocol differs from the one
-// this adapter was written for; it never fails on a mismatch.
+// ping checks the server and warns for protocols that have not been verified
+// with this adapter; it never fails on a mismatch.
 func ping(ctx context.Context, dial dialFunc, path string, log *slog.Logger) (Pong, error) {
 	var res pongResult
 	if err := call(ctx, dial, path, log, "ping", nil, &res); err != nil {
 		return Pong{}, err
 	}
-	if res.Protocol != protocolVersion {
+	if !supportsProtocol(res.Protocol) {
 		log.Warn("herdr protocol mismatch",
 			slog.Int("got", res.Protocol),
-			slog.Int("want", protocolVersion),
+			slog.Any("supported", SupportedProtocolVersions()),
 			slog.String("version", res.Version))
 	}
 	return Pong{Version: res.Version, Protocol: res.Protocol}, nil
