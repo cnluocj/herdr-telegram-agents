@@ -90,7 +90,7 @@ The socket path comes from `HERDR_SOCKET_PATH` and falls back to
 | `cmd/herdr-tg/` | Binary entry point |
 | `internal/domain/` | Agents, statuses, topics, mapping, commands, config, options, presence, secret redaction, doctor checks, events and the ports (standard library only) |
 | `internal/app/` | Use cases: agent registry, reconciler, debounce, bridge (screens out, commands in), screen capture for `/screen all`, the options panel, presence and quiet mode, the topic sweep, doctor, setup wizard, supervisor, daemon loop |
-| `internal/adapters/herdr/` | Herdr socket adapter: dialers, one-shot calls, event stream, `herdr` CLI runner |
+| `internal/adapters/herdr/` | Herdr socket adapter: dialers (Unix socket or Win32 named pipe normalized from `HERDR_SOCKET_PATH`), one-shot calls, event stream, `herdr` CLI runner |
 | `internal/adapters/telegram/` | Telegram Bot API adapter: bot, queue, formatting, icons, inbound updates, setup probe |
 | `internal/adapters/state/` | `config.json`, `mapping.json`, `options.json` and pid file stores |
 | `internal/adapters/logging/` | JSON file logger with size-based rotation |

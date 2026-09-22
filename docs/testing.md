@@ -134,7 +134,7 @@ built and unit-tested on a Windows CI runner only.
 
 - [ ] `herdr plugin install` runs `scripts/install.ps1` and produces `bin\herdr-tg.exe` with a verified checksum
 - [ ] The startup hook spawns the daemon detached (`DETACHED_PROCESS`), and closing the launching terminal leaves it running
-- [ ] The Herdr named pipe from `HERDR_SOCKET_PATH` is reachable: agents appear and events flow
+- [ ] The Herdr named pipe from `HERDR_SOCKET_PATH` is reachable: agents appear and events flow (`HERDR_SOCKET_PATH` filesystem marker is normalized into the `\\.\pipe\` namespace)
 - [ ] `stop` and `resync` reach the daemon through the control pipe (`\\.\pipe\herdr-tg-<hash>`), with no POSIX signals involved
 - [ ] `status` reports the daemon's line, `quiet=` and `pager=` included
 - [ ] Presence works with `Quiet while at the desk` ticked: typing keeps `quiet=on` (the `GetLastInputInfo` idle source), leaving the machine for `Away after` minutes turns it to `away` and the topics catch up

@@ -14,5 +14,5 @@ type dialFunc func(ctx context.Context, path string) (net.Conn, error)
 
 // dial connects to the Herdr named pipe.
 func dial(ctx context.Context, path string) (net.Conn, error) {
-	return winio.DialPipeContext(ctx, path)
+	return winio.DialPipeContext(ctx, herdrPipePath(path))
 }
