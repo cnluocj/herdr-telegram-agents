@@ -55,25 +55,35 @@ type eventEnvelope struct {
 // protocol schemas. Optional fields are pointers or zero values; the adapter
 // never relies on their presence.
 type agentInfo struct {
-	PaneID                 string  `json:"pane_id"`
-	WorkspaceID            string  `json:"workspace_id"`
-	TabID                  string  `json:"tab_id"`
-	TerminalID             string  `json:"terminal_id"`
-	Agent                  string  `json:"agent"`
-	AgentStatus            string  `json:"agent_status"`
-	Name                   *string `json:"name"`
-	DisplayAgent           string  `json:"display_agent"`
-	Title                  string  `json:"title"`
-	TerminalTitle          string  `json:"terminal_title"`
-	TerminalTitleStripped  string  `json:"terminal_title_stripped"`
-	Cwd                    string  `json:"cwd"`
-	ForegroundCwd          string  `json:"foreground_cwd"`
-	Focused                bool    `json:"focused"`
-	Revision               int64   `json:"revision"`
-	StateChangeSeq         int64   `json:"state_change_seq"`
-	InteractiveReady       bool    `json:"interactive_ready"`
-	LaunchPending          bool    `json:"launch_pending"`
-	ScreenDetectionSkipped bool    `json:"screen_detection_skipped"`
+	PaneID                 string            `json:"pane_id"`
+	WorkspaceID            string            `json:"workspace_id"`
+	TabID                  string            `json:"tab_id"`
+	TerminalID             string            `json:"terminal_id"`
+	Agent                  string            `json:"agent"`
+	AgentStatus            string            `json:"agent_status"`
+	Name                   *string           `json:"name"`
+	DisplayAgent           string            `json:"display_agent"`
+	Title                  string            `json:"title"`
+	TerminalTitle          string            `json:"terminal_title"`
+	TerminalTitleStripped  string            `json:"terminal_title_stripped"`
+	Cwd                    string            `json:"cwd"`
+	ForegroundCwd          string            `json:"foreground_cwd"`
+	AgentSession           *agentSessionInfo `json:"agent_session"`
+	Focused                bool              `json:"focused"`
+	Revision               int64             `json:"revision"`
+	StateChangeSeq         int64             `json:"state_change_seq"`
+	InteractiveReady       bool              `json:"interactive_ready"`
+	LaunchPending          bool              `json:"launch_pending"`
+	ScreenDetectionSkipped bool              `json:"screen_detection_skipped"`
+}
+
+// agentSessionInfo is Herdr's nullable identity tuple. It is converted to a
+// digest at the wire boundary; its values are never copied into the domain.
+type agentSessionInfo struct {
+	Source string `json:"source"`
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
 }
 
 type pongResult struct {
@@ -265,8 +275,17 @@ func toDomainAgent(a agentInfo) domain.Agent {
 	if a.Name != nil {
 		name = strings.TrimSpace(*a.Name)
 	}
+	key := domain.Key{PaneID: a.PaneID, TerminalID: a.TerminalID}
+	if a.AgentSession != nil {
+		key.SessionDigest = (domain.SessionTuple{
+			Source: a.AgentSession.Source,
+			Agent:  a.AgentSession.Agent,
+			Kind:   a.AgentSession.Kind,
+			Value:  a.AgentSession.Value,
+		}).Digest()
+	}
 	return domain.Agent{
-		Key:            domain.Key{PaneID: a.PaneID, TerminalID: a.TerminalID},
+		Key:            key,
 		WorkspaceID:    a.WorkspaceID,
 		TabID:          a.TabID,
 		Kind:           a.Agent,

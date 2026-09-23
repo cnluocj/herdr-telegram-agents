@@ -147,6 +147,29 @@ func TestGatewayListAgents(t *testing.T) {
 	}
 }
 
+func TestGatewayListAgentsPreservesSessionDigest(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("agent.list", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return json.RawMessage(`{"type":"agent_list","agents":[{"agent":"codex","agent_status":"working","pane_id":"p1","tab_id":"t1","terminal_id":"term-1","workspace_id":"w1","agent_session":{"source":"codex","agent":"codex","kind":"path","value":"/private/session/abc"}}]}`), nil
+	})
+	s.Handle("workspace.list", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return map[string]any{"type": "workspace_list", "workspaces": []any{}}, nil
+	})
+	s.Handle("tab.list", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return map[string]any{"type": "tab_list", "tabs": []any{}}, nil
+	})
+	g := newGateway(t, s)
+
+	agents, err := g.ListAgents(ctxT(t))
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	want := (domain.SessionTuple{Source: "codex", Agent: "codex", Kind: "path", Value: "/private/session/abc"}).Digest()
+	if len(agents) != 1 || agents[0].SessionDigest != want {
+		t.Fatalf("ListAgents session identity = %+v, want digest %q", agents, want)
+	}
+}
+
 func TestGatewayReadScreen(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.read", func(id string, params json.RawMessage) (any, *testkit.APIError) {

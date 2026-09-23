@@ -1,18 +1,91 @@
 package domain
 
+import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+)
+
 // Key identifies an agent for the lifetime of the plugin state.
 //
-// PaneID alone is not enough: Herdr never reuses a closed pane id, but a new
-// agent can start in the same pane after the previous one exits. TerminalID
-// changes in that case, so the pair distinguishes the two agents.
+// PaneID alone is not enough: a new agent can start in the same pane after the
+// previous one exits. TerminalID identifies the current runtime instance;
+// SessionDigest can identify that session across a Herdr restart.
 type Key struct {
-	PaneID     string
-	TerminalID string
+	PaneID        string
+	TerminalID    string
+	SessionDigest string
 }
 
-// String renders the key as "<pane>/<terminal>" for logs and state files.
+// String renders a sessionless key as "<pane>/<terminal>" and a sessioned
+// key as a versioned, delimiter-safe value for logs and state files.
 func (k Key) String() string {
+	if k.SessionDigest != "" {
+		return "v2:" + encodeKeyPart(k.PaneID) + ":" + encodeKeyPart(k.TerminalID) + ":" + k.SessionDigest
+	}
 	return k.PaneID + "/" + k.TerminalID
+}
+
+// SessionTuple is the complete Herdr session identity used to derive a key.
+// Keep it transient: persist only Digest(), never the tuple values.
+type SessionTuple struct {
+	Source string
+	Agent  string
+	Kind   string
+	Value  string
+}
+
+// Digest returns a deterministic SHA-256 digest for a complete session tuple.
+// An incomplete tuple has no usable identity and returns an empty digest.
+func (s SessionTuple) Digest() string {
+	parts := [...]string{s.Source, s.Agent, s.Kind, s.Value}
+	for _, part := range parts {
+		if part == "" {
+			return ""
+		}
+	}
+
+	h := sha256.New()
+	var size [binary.MaxVarintLen64]byte
+	for _, part := range parts {
+		n := binary.PutUvarint(size[:], uint64(len(part)))
+		_, _ = h.Write(size[:n])
+		_, _ = h.Write([]byte(part))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// SameSession reports whether two keys identify the same session in the same
+// pane. Terminal IDs are intentionally ignored because they can change across
+// a Herdr restart.
+func (k Key) SameSession(other Key) bool {
+	return k.PaneID != "" && k.PaneID == other.PaneID &&
+		k.SessionDigest != "" && k.SessionDigest == other.SessionDigest
+}
+
+// ConflictsWith reports whether two keys in the same pane carry different,
+// known session identities.
+func (k Key) ConflictsWith(other Key) bool {
+	return k.PaneID != "" && k.PaneID == other.PaneID &&
+		k.SessionDigest != "" && other.SessionDigest != "" && k.SessionDigest != other.SessionDigest
+}
+
+// SameIdentity reports whether two keys have a known matching identity. Two
+// session-aware keys compare by digest; if either has no digest, the current
+// terminal ID is the only exact identity available.
+func (k Key) SameIdentity(other Key) bool {
+	if k.PaneID == "" || k.PaneID != other.PaneID {
+		return false
+	}
+	if k.SessionDigest != "" && other.SessionDigest != "" {
+		return k.SessionDigest == other.SessionDigest
+	}
+	return k.TerminalID != "" && k.TerminalID == other.TerminalID
+}
+
+func encodeKeyPart(s string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
 
 // Agent is the plugin's view of one Herdr agent.

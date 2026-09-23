@@ -31,6 +31,8 @@ type mappingFileEntry struct {
 	Status    string    `json:"status"`
 	Closed    bool      `json:"closed"`
 	Muted     bool      `json:"muted,omitempty"`
+	Cwd       string    `json:"cwd,omitempty"`
+	AgentKind string    `json:"agent_kind,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -88,7 +90,7 @@ func (s *MappingStore) Load(context.Context) (*domain.Mapping, error) {
 		if renameErr := os.Rename(s.path, backup); renameErr != nil {
 			return nil, fmt.Errorf("mapping %s is malformed (%v) and could not be moved aside: %w", s.path, err, renameErr)
 		}
-		s.log.Error("mapping file malformed, moved aside and starting empty",
+		s.log.Warn("mapping file malformed, moved aside and starting empty",
 			slog.String("path", s.path), slog.String("backup", backup), slog.String("err", err.Error()))
 		return domain.NewMapping(0), nil
 	}
@@ -104,6 +106,8 @@ func (s *MappingStore) Load(context.Context) (*domain.Mapping, error) {
 			Status:    domain.Status(e.Status),
 			Closed:    e.Closed,
 			Muted:     e.Muted,
+			Cwd:       e.Cwd,
+			AgentKind: e.AgentKind,
 			UpdatedAt: e.UpdatedAt,
 		}
 	}
@@ -113,8 +117,12 @@ func (s *MappingStore) Load(context.Context) (*domain.Mapping, error) {
 }
 
 // Save writes the mapping atomically with mode 0644.
-func (s *MappingStore) Save(_ context.Context, m *domain.Mapping) error {
-	f := mappingFile{Version: m.Version, ChatID: m.ChatID, Topics: make(map[string]mappingFileEntry, len(m.Topics)), Dashboard: m.Dashboard}
+func (s *MappingStore) Save(ctx context.Context, m *domain.Mapping) error {
+	version := m.Version
+	if version < domain.MappingVersion {
+		version = domain.MappingVersion
+	}
+	f := mappingFile{Version: version, ChatID: m.ChatID, Topics: make(map[string]mappingFileEntry, len(m.Topics)), Dashboard: m.Dashboard}
 	for key, e := range m.Topics {
 		f.Topics[key] = mappingFileEntry{
 			ThreadID:  e.ThreadID,
@@ -122,6 +130,8 @@ func (s *MappingStore) Save(_ context.Context, m *domain.Mapping) error {
 			Status:    string(e.Status),
 			Closed:    e.Closed,
 			Muted:     e.Muted,
+			Cwd:       e.Cwd,
+			AgentKind: e.AgentKind,
 			UpdatedAt: e.UpdatedAt,
 		}
 	}
@@ -131,6 +141,18 @@ func (s *MappingStore) Save(_ context.Context, m *domain.Mapping) error {
 	}
 	if err := writeAtomic(s.path, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("save mapping: %w", err)
+	}
+	if m.Version > 0 && m.Version < version {
+		for key, e := range m.Topics {
+			attrs := []slog.Attr{slog.Int("thread_id", e.ThreadID)}
+			if k, ok := domain.ParseKey(key); ok {
+				attrs = append(attrs, slog.String("pane", k.PaneID))
+			}
+			s.log.LogAttrs(ctx, slog.LevelInfo, "mapping entry migrated", attrs...)
+		}
+	}
+	if m.Version < version {
+		m.Version = version
 	}
 	s.log.Debug("mapping saved", slog.String("path", s.path), slog.Int("entries", len(m.Topics)), slog.Int("dashboard_message_id", m.Dashboard))
 	return nil

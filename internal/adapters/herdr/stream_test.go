@@ -245,10 +245,13 @@ func TestStreamCancelStopsPromptly(t *testing.T) {
 func TestTranslateEvent(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	tests := []struct {
-		name string
-		line string
-		want domain.HerdrEvent
-		ok   bool
+		name              string
+		line              string
+		want              domain.HerdrEvent
+		wantTerminalID    string
+		wantStatus        domain.Status
+		wantSessionDigest string
+		ok                bool
 	}{
 		{
 			name: "released agent with final status",
@@ -263,10 +266,21 @@ func TestTranslateEvent(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "pane updated carries full agent",
-			line: `{"event":"pane_updated","data":{"pane":` + agentListSampleAgent + `}}`,
-			want: domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "w3:p2", WorkspaceID: "w3", TabID: "w3:t2"},
-			ok:   true,
+			name:           "pane updated carries full agent",
+			line:           `{"event":"pane_updated","data":{"pane":` + agentListSampleAgent + `}}`,
+			want:           domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "w3:p2", WorkspaceID: "w3", TabID: "w3:t2"},
+			wantTerminalID: "term_65a77760e3b0a1",
+			wantStatus:     domain.StatusIdle,
+			ok:             true,
+		},
+		{
+			name:              "pane updated carries session identity",
+			line:              `{"event":"pane_updated","data":{"pane":{"agent":"codex","agent_status":"working","pane_id":"p1","tab_id":"t1","terminal_id":"term-1","workspace_id":"w1","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}}}`,
+			want:              domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "p1", WorkspaceID: "w1", TabID: "t1"},
+			wantTerminalID:    "term-1",
+			wantStatus:        domain.StatusWorking,
+			wantSessionDigest: (domain.SessionTuple{Source: "codex", Agent: "codex", Kind: "id", Value: "session-id-42"}).Digest(),
+			ok:                true,
 		},
 		{name: "unknown kind", line: `{"event":"layout_updated","data":{}}`, ok: false},
 		{
@@ -289,8 +303,11 @@ func TestTranslateEvent(t *testing.T) {
 				return
 			}
 			if got.Kind == domain.PaneUpdated {
-				if got.Agent == nil || got.Agent.TerminalID != "term_65a77760e3b0a1" || got.Agent.Status != domain.StatusIdle {
+				if got.Agent == nil || got.Agent.TerminalID != tt.wantTerminalID || got.Agent.Status != tt.wantStatus {
 					t.Fatalf("agent = %+v", got.Agent)
+				}
+				if got.Agent == nil || got.Agent.SessionDigest != tt.wantSessionDigest {
+					t.Fatalf("agent session digest = %+v, want %q", got.Agent, tt.wantSessionDigest)
 				}
 				got.Agent = nil
 			}

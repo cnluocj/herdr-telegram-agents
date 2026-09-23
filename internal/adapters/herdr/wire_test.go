@@ -55,6 +55,59 @@ func TestDecodeAgentListSample(t *testing.T) {
 	}
 }
 
+func TestToDomainAgentSession(t *testing.T) {
+	idSession := domain.SessionTuple{Source: "codex", Agent: "codex", Kind: "id", Value: "session-id-42"}
+	pathSession := domain.SessionTuple{Source: "claude-code", Agent: "claude", Kind: "path", Value: "/private/session/abc"}
+	tests := []struct {
+		name       string
+		json       string
+		wantDigest string
+	}{
+		{
+			name:       "kind id",
+			json:       `{"pane_id":"p1","terminal_id":"term-old","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
+			wantDigest: idSession.Digest(),
+		},
+		{
+			name:       "kind path",
+			json:       `{"pane_id":"p2","terminal_id":"term-path","agent_session":{"source":"claude-code","agent":"claude","kind":"path","value":"/private/session/abc"}}`,
+			wantDigest: pathSession.Digest(),
+		},
+		{
+			name:       "null session",
+			json:       `{"pane_id":"p3","terminal_id":"term-null","agent_session":null}`,
+			wantDigest: "",
+		},
+		{
+			name:       "absent session",
+			json:       `{"pane_id":"p4","terminal_id":"term-absent"}`,
+			wantDigest: "",
+		},
+		{
+			name:       "terminal changed",
+			json:       `{"pane_id":"p1","terminal_id":"term-new","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
+			wantDigest: idSession.Digest(),
+		},
+	}
+	agents := make(map[string]domain.Agent, len(tests))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var info agentInfo
+			if err := json.Unmarshal([]byte(tt.json), &info); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			agent := toDomainAgent(info)
+			if agent.SessionDigest != tt.wantDigest {
+				t.Fatalf("SessionDigest = %q, want %q", agent.SessionDigest, tt.wantDigest)
+			}
+			agents[tt.name] = agent
+		})
+	}
+	if !agents["kind id"].Key.SameSession(agents["terminal changed"].Key) {
+		t.Fatal("same session should keep its identity when terminal_id changes")
+	}
+}
+
 func TestToDomainAgentLabelPriority(t *testing.T) {
 	name := "  reviewer "
 	tests := []struct {
