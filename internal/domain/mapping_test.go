@@ -441,7 +441,9 @@ func TestPlanReassociationFallbackRequirements(t *testing.T) {
 			newKey := domain.Key{PaneID: "pane-1", TerminalID: "term-new"}
 			m.Topics[oldKey.String()] = &domain.TopicEntry{
 				ThreadID: 42, Name: tt.entryName, Status: domain.StatusWorking,
-				Cwd: tt.entryCwd, AgentKind: tt.entryKind, UpdatedAt: t0,
+				Cwd: tt.entryCwd, AgentKind: tt.entryKind,
+				LegacyNoCwd: tt.name == "v1 without cwd uses nonempty live cwd and canonical name",
+				UpdatedAt:   t0,
 			}
 			live := domain.Agent{Key: newKey, Name: "reviewer", Kind: tt.liveKind, Cwd: tt.liveCwd, Status: domain.StatusIdle}
 			plan := m.PlanReassociation([]domain.Agent{live})
@@ -454,6 +456,23 @@ func TestPlanReassociationFallbackRequirements(t *testing.T) {
 				t.Fatal("planning mutated the mapping")
 			}
 		})
+	}
+}
+
+func TestPlanReassociationDoesNotFallbackFromNewEntryWithoutCwd(t *testing.T) {
+	m := domain.NewMapping(-1001)
+	previous := domain.Agent{
+		Key:  domain.Key{PaneID: "pane-1", TerminalID: "term-old"},
+		Name: "reviewer", Kind: "codex", Status: domain.StatusWorking,
+	}
+	m.Link(previous.Key, domain.Topic{ThreadID: 42}, previous, t0)
+	current := previous
+	current.Key.TerminalID = "term-new"
+	current.Cwd = "/work/repo"
+
+	plan := m.PlanReassociation([]domain.Agent{current})
+	if len(plan.Assignments) != 0 {
+		t.Fatalf("new entry with unknown cwd was adopted: %+v", plan.Assignments)
 	}
 }
 

@@ -27,7 +27,9 @@ type TopicEntry struct {
 	Muted     bool
 	Cwd       string
 	AgentKind string
-	UpdatedAt time.Time
+	// LegacyNoCwd preserves the v1 fallback allowance until cwd is learned.
+	LegacyNoCwd bool
+	UpdatedAt   time.Time
 }
 
 // ReassociationReason describes why a live agent was assigned to an existing
@@ -361,7 +363,8 @@ func eligibleFallback(entryKey Key, entry *TopicEntry, live Agent) bool {
 		(entryKey.SessionDigest != "" && live.Key.SessionDigest != "") {
 		return false
 	}
-	if live.Cwd == "" || (entry.Cwd != "" && entry.Cwd != live.Cwd) {
+	if live.Cwd == "" || (entry.Cwd == "" && !entry.LegacyNoCwd) ||
+		(entry.Cwd != "" && entry.Cwd != live.Cwd) {
 		return false
 	}
 	if entry.AgentKind != "" && entry.AgentKind != live.Kind {
@@ -448,6 +451,10 @@ func (m *Mapping) UpdateMetadata(k Key, a Agent) bool {
 	changed := false
 	if a.Cwd != "" && e.Cwd != a.Cwd {
 		e.Cwd = a.Cwd
+		changed = true
+	}
+	if a.Cwd != "" && e.LegacyNoCwd {
+		e.LegacyNoCwd = false
 		changed = true
 	}
 	if a.Kind != "" && e.AgentKind != a.Kind {

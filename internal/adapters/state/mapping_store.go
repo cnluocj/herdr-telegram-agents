@@ -26,14 +26,15 @@ type mappingFile struct {
 }
 
 type mappingFileEntry struct {
-	ThreadID  int       `json:"thread_id"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	Closed    bool      `json:"closed"`
-	Muted     bool      `json:"muted,omitempty"`
-	Cwd       string    `json:"cwd,omitempty"`
-	AgentKind string    `json:"agent_kind,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ThreadID    int       `json:"thread_id"`
+	Name        string    `json:"name"`
+	Status      string    `json:"status"`
+	Closed      bool      `json:"closed"`
+	Muted       bool      `json:"muted,omitempty"`
+	Cwd         string    `json:"cwd,omitempty"`
+	AgentKind   string    `json:"agent_kind,omitempty"`
+	LegacyNoCwd bool      `json:"legacy_no_cwd,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // MappingStore implements domain.MappingStore over STATE_DIR/mapping.json.
@@ -101,14 +102,15 @@ func (s *MappingStore) Load(context.Context) (*domain.Mapping, error) {
 	m.Dashboard = f.Dashboard
 	for key, e := range f.Topics {
 		m.Topics[key] = &domain.TopicEntry{
-			ThreadID:  e.ThreadID,
-			Name:      e.Name,
-			Status:    domain.Status(e.Status),
-			Closed:    e.Closed,
-			Muted:     e.Muted,
-			Cwd:       e.Cwd,
-			AgentKind: e.AgentKind,
-			UpdatedAt: e.UpdatedAt,
+			ThreadID:    e.ThreadID,
+			Name:        e.Name,
+			Status:      domain.Status(e.Status),
+			Closed:      e.Closed,
+			Muted:       e.Muted,
+			Cwd:         e.Cwd,
+			AgentKind:   e.AgentKind,
+			LegacyNoCwd: e.LegacyNoCwd || (f.Version < domain.MappingVersion && e.Cwd == ""),
+			UpdatedAt:   e.UpdatedAt,
 		}
 	}
 	s.log.Debug("mapping loaded", slog.String("path", s.path), slog.Int64("chat_id", m.ChatID),
@@ -125,14 +127,15 @@ func (s *MappingStore) Save(ctx context.Context, m *domain.Mapping) error {
 	f := mappingFile{Version: version, ChatID: m.ChatID, Topics: make(map[string]mappingFileEntry, len(m.Topics)), Dashboard: m.Dashboard}
 	for key, e := range m.Topics {
 		f.Topics[key] = mappingFileEntry{
-			ThreadID:  e.ThreadID,
-			Name:      e.Name,
-			Status:    string(e.Status),
-			Closed:    e.Closed,
-			Muted:     e.Muted,
-			Cwd:       e.Cwd,
-			AgentKind: e.AgentKind,
-			UpdatedAt: e.UpdatedAt,
+			ThreadID:    e.ThreadID,
+			Name:        e.Name,
+			Status:      string(e.Status),
+			Closed:      e.Closed,
+			Muted:       e.Muted,
+			Cwd:         e.Cwd,
+			AgentKind:   e.AgentKind,
+			LegacyNoCwd: e.LegacyNoCwd,
+			UpdatedAt:   e.UpdatedAt,
 		}
 	}
 	data, err := json.MarshalIndent(f, "", "  ")

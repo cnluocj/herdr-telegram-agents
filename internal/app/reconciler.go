@@ -336,7 +336,7 @@ func (r *Reconciler) reassociate(ctx context.Context, live []domain.Agent) error
 		return nil
 	}
 	if err := r.mapping.ApplyReassociation(plan); err != nil {
-		r.log.Error("topic reassociation could not be applied", slog.String("err", err.Error()))
+		r.log.Error("[FIX] topic reassociation could not be applied", slog.String("err", err.Error()))
 		return fmt.Errorf("apply topic reassociation: %w", err)
 	}
 
@@ -357,7 +357,7 @@ func (r *Reconciler) reassociate(ctx context.Context, live []domain.Agent) error
 		if assignment.From != assignment.To {
 			r.reassociated[assignment.To] = reassociatedTopic{from: assignment.From, threadID: entry.ThreadID}
 		}
-		r.log.Debug("topic reassociation candidate selected",
+		r.log.Debug("[FIX] topic reassociation candidate selected",
 			slog.String("reason", string(assignment.Reason)),
 			slog.String("old_key", assignment.From.String()),
 			slog.String("new_key", assignment.To.String()),
@@ -391,7 +391,7 @@ func (r *Reconciler) reassociate(ctx context.Context, live []domain.Agent) error
 			continue
 		}
 		entry, _ := r.mapping.TopicFor(assignment.To)
-		r.log.Info("topic adopted after agent reassociation",
+		r.log.Info("[FIX] topic adopted after agent reassociation",
 			slog.String("old_key", assignment.From.String()),
 			slog.String("new_key", assignment.To.String()),
 			slog.String("reason", string(assignment.Reason)),

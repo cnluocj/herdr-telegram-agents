@@ -34,7 +34,8 @@ in a topic and what gets posted there is in [commands.md](commands.md).
   directory and an exact pane/name match. The daemon prefers the sole live
   candidate over older closed generations; if several candidates remain, it
   does not guess and creates a new topic. Old topics remain subject to the
-  configured cleanup sweep.
+  configured cleanup sweep. A newly created entry with no recorded working
+  directory cannot use this fallback, even if Herdr reports a directory later.
 - When Herdr reports a different non-empty session identity, the topic is
   never inherited from another known session, even if pane, directory and
   name match. `claude --resume` therefore keeps the old topic only when Herdr
@@ -43,9 +44,10 @@ in a topic and what gets posted there is in [commands.md](commands.md).
 - `mapping.json` version 1 files continue to load with their topic ids,
   statuses, mute/closed flags, timestamps and dashboard id intact. The next
   successful mapping write stores version 2 and its optional working
-  directory and agent-kind metadata. Those fields are refreshed when Herdr
-  provides changed metadata; an unchanged mapping is not rewritten on every
-  poll.
+  directory and agent-kind metadata. An entry that still lacks a directory
+  carries `legacy_no_cwd` so its version-1 fallback survives later saves.
+  Those fields are refreshed when Herdr provides changed metadata; an
+  unchanged mapping is not rewritten on every poll.
 - When an agent's pane closes the topic gets the 🏁 icon and is closed. Topics
   of agents that vanished while the daemon was down are closed on the next
   start unless a matching session is adopted first.
