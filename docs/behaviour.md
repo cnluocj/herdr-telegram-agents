@@ -17,13 +17,38 @@ in a topic and what gets posted there is in [commands.md](commands.md).
   pick others (see [Options](#options)). The icons come from Telegram's free
   topic-icon pack; the colour is the fallback when the pack lacks an emoji,
   and an edit then leaves the icon unchanged.
-- Agents are identified by pane and terminal id; a topic is created the first
-  time an agent appears and reused after a restart.
-- When an agent's pane closes the topic gets the 🏁 icon and is closed. If the
-  same agent comes back in that pane (for example `claude --resume`), the
-  finished topic is reopened and refreshed instead of a new one being made. Topics
+- A topic is created the first time an agent appears. Herdr's pane id keeps
+  topics separate when the same session is shown in two panes; the terminal
+  id routes live calls, while a digest of Herdr's complete `agent_session`
+  identifies that session across restarts. If Herdr reports the same session
+  after a restart, the existing topic and its history stay in place even when
+  the terminal id changes. A current topic needs no Telegram edit during
+  adoption. A finished topic is reopened and refreshed when the matching
+  session returns.
+- If either the live agent or stored entry lacks a usable `agent_session`,
+  continuity is best-effort: the daemon can adopt one unambiguous topic in the
+  same pane with the same canonical topic name and a non-empty live working
+  directory. If the stored entry already has a working directory or agent
+  kind, those values must also match. Entries from mapping version 1 have no
+  recorded working directory, so they can match only with a non-empty live
+  directory and an exact pane/name match. The daemon prefers the sole live
+  candidate over older closed generations; if several candidates remain, it
+  does not guess and creates a new topic. Old topics remain subject to the
+  configured cleanup sweep.
+- When Herdr reports a different non-empty session identity, the topic is
+  never inherited from another known session, even if pane, directory and
+  name match. `claude --resume` therefore keeps the old topic only when Herdr
+  reports the same session; a resume that starts a new session gets a new
+  topic, and the old one follows the normal exit and cleanup rules.
+- `mapping.json` version 1 files continue to load with their topic ids,
+  statuses, mute/closed flags, timestamps and dashboard id intact. The next
+  successful mapping write stores version 2 and its optional working
+  directory and agent-kind metadata. Those fields are refreshed when Herdr
+  provides changed metadata; an unchanged mapping is not rewritten on every
+  poll.
+- When an agent's pane closes the topic gets the 🏁 icon and is closed. Topics
   of agents that vanished while the daemon was down are closed on the next
-  start.
+  start unless a matching session is adopted first.
 - The daemon exits by itself when the Herdr socket is gone for 60 s, when the
   bot token is rejected, when another process polls the same bot, or when the
   bot is removed from the group. Losing **Manage topics** only pauses edits
@@ -44,8 +69,10 @@ in a topic and what gets posted there is in [commands.md](commands.md).
   The `<workspace> · ` prefix is optional; an empty remainder is ignored for
   a tab and clears a custom name. The topic settles on the canonical form.
 - Close a topic by hand and the mirror goes quiet for that agent: no icon
-  edits, no screen posts, until you reopen it. Reopening refreshes name and
-  icon; if the agent exited meanwhile the topic gets 🏁 and is closed again.
+  edits, no screen posts, until you reopen it. A successful same-agent
+  reassociation keeps this mute. Reopening refreshes name and icon and clears
+  the mute; if the agent exited meanwhile the topic gets 🏁 and is closed
+  again.
 
 ## The dashboard
 

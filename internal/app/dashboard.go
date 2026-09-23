@@ -87,7 +87,16 @@ func (b *Dashboard) Observe(ev AgentEvent) {
 		delete(b.since, key)
 		delete(b.last, key)
 	case AgentAppeared:
-		delete(b.since, key)
+		if from := ev.ReassociatedFrom; from != nil {
+			previousStatus, hadPrevious := b.last[*from]
+			moveAgentState(b.since, *from, key)
+			moveAgentState(b.last, *from, key)
+			if hadPrevious && previousStatus != ev.Agent.Status {
+				b.since[key] = b.clock.Now()
+			}
+		} else {
+			delete(b.since, key)
+		}
 		b.last[key] = ev.Agent.Status
 	case AgentChanged:
 		if prev, ok := b.last[key]; !ok || prev != ev.Agent.Status {

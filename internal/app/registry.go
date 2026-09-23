@@ -25,6 +25,9 @@ const (
 type AgentEvent struct {
 	Kind  AgentEventKind
 	Agent domain.Agent
+	// ReassociatedFrom is set by the daemon when the reconciler retained
+	// this agent's existing Telegram thread under a replacement key.
+	ReassociatedFrom *domain.Key
 }
 
 // Registry merges Herdr socket events with agent.list snapshots into a
@@ -114,8 +117,9 @@ func (r *Registry) RequestSnapshot() {
 }
 
 // Snapshot lists the agents, diffs them against the registry and updates
-// the watched pane set. It returns the resulting events in a stable order:
-// gone, then appeared, then changed.
+// the watched pane set. It returns the resulting events in a stable order.
+// A replacement that still identifies the same agent appears before its
+// previous key goes away, so the reconciler can move the topic first.
 func (r *Registry) Snapshot(ctx context.Context) ([]AgentEvent, error) {
 	agents, err := r.herdr.ListAgents(ctx)
 	now := r.clock.Now()
@@ -168,11 +172,89 @@ func (r *Registry) applySnapshot(agents []domain.Agent, now time.Time) ([]AgentE
 		panes = append(panes, key.PaneID)
 	}
 	sort.Strings(panes)
-	events := append(append(sortEvents(gone), sortEvents(appeared)...), sortEvents(changed)...)
+	events := orderSnapshotEvents(gone, appeared, changed)
 	r.log.Debug("agent snapshot applied",
 		slog.Int("agents", len(next)), slog.Int("appeared", len(appeared)),
 		slog.Int("changed", len(changed)), slog.Int("gone", len(gone)))
 	return events, panes
+}
+
+// orderSnapshotEvents puts an appeared replacement ahead of its gone key
+// only when the two agents share a known session or satisfy the same
+// conservative metadata fallback used by topic reassociation. Other
+// replacements keep the normal exit-before-create order.
+func orderSnapshotEvents(gone, appeared, changed []AgentEvent) []AgentEvent {
+	gone = sortEvents(gone)
+	appeared = sortEvents(appeared)
+	changed = sortEvents(changed)
+
+	pairedAppeared := make(map[int]bool)
+	oldOwners := make(map[int]int)
+	newMatches := make(map[int]int)
+	for newIndex, next := range appeared {
+		for oldIndex, prev := range gone {
+			if sameAgentRestart(prev.Agent, next.Agent) {
+				newMatches[newIndex]++
+				oldOwners[oldIndex]++
+			}
+		}
+	}
+	for newIndex := range appeared {
+		if newMatches[newIndex] != 1 {
+			continue
+		}
+		for oldIndex, prev := range gone {
+			if oldOwners[oldIndex] == 1 && sameAgentRestart(prev.Agent, appeared[newIndex].Agent) {
+				pairedAppeared[newIndex] = true
+				break
+			}
+		}
+	}
+
+	events := make([]AgentEvent, 0, len(gone)+len(appeared)+len(changed))
+	for i, ev := range appeared {
+		if pairedAppeared[i] {
+			events = append(events, ev)
+		}
+	}
+	events = append(events, gone...)
+	for i, ev := range appeared {
+		if !pairedAppeared[i] {
+			events = append(events, ev)
+		}
+	}
+	return append(events, changed...)
+}
+
+// sameAgentRestart is the event-ordering counterpart of the mapping's
+// session-first matcher. It is deliberately conservative when either
+// session digest is absent, so a known identity conflict is never reordered
+// as a reusable agent.
+func sameAgentRestart(previous, next domain.Agent) bool {
+	if previous.Key == next.Key || previous.Key.PaneID == "" || previous.Key.PaneID != next.Key.PaneID {
+		return false
+	}
+	if previous.Key.SessionDigest != "" && next.Key.SessionDigest != "" {
+		return previous.Key.SameSession(next.Key)
+	}
+	if previous.Key.ConflictsWith(next.Key) || next.Cwd == "" || (previous.Cwd != "" && previous.Cwd != next.Cwd) {
+		return false
+	}
+	if previous.Kind != "" && previous.Kind != next.Kind {
+		return false
+	}
+	previousName, _ := domain.Desired(previous)
+	nextName, _ := domain.Desired(next)
+	return previousName == nextName
+}
+
+func moveAgentState[T any](state map[domain.Key]T, from, to domain.Key) {
+	if value, ok := state[from]; ok {
+		if _, exists := state[to]; !exists {
+			state[to] = value
+		}
+		delete(state, from)
+	}
 }
 
 // Apply folds one socket event into the registry. It returns the events to
@@ -315,7 +397,7 @@ func (r *Registry) Run(ctx context.Context, out chan<- AgentEvent) error {
 }
 
 func differs(a, b domain.Agent) bool {
-	return a.Label() != b.Label() || a.Status != b.Status
+	return a.Label() != b.Label() || a.Status != b.Status || a.Kind != b.Kind || a.Cwd != b.Cwd
 }
 
 func exited(a domain.Agent) domain.Agent {

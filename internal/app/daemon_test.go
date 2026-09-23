@@ -171,6 +171,79 @@ func TestDaemonStartupReconcileAndShutdown(t *testing.T) {
 	}
 }
 
+func TestDaemonStartupReassociatesStoredSessionTopic(t *testing.T) {
+	f := newDaemon(t)
+	oldKey := sessionKey("p1", "term-old", "session-1")
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+	topic, err := f.tg.CreateTopic(context.Background(), "reviewer", domain.StatusWorking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+	f.tg.Reset()
+
+	current := oldAgent
+	current.Key.TerminalID = "term-new"
+	f.herdr.SetAgents([]domain.Agent{current})
+	f.start(t)
+	f.waitCalls(t, 2)
+	assertCalls(t, f.tg, "rights", started1)
+	entry, ok := f.rec.Mapping().TopicFor(current.Key)
+	if !ok || entry.ThreadID != topic.ThreadID {
+		t.Fatalf("startup mapping = %+v ok=%v, want retained thread %d", entry, ok, topic.ThreadID)
+	}
+	if saved := f.store.Saved(); saved == nil {
+		t.Fatal("startup reassociation was not saved")
+	} else if _, ok := saved.TopicFor(current.Key); !ok {
+		t.Fatal("startup save retained the old mapping key")
+	}
+	if err := f.stop(t); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	assertCalls(t, f.tg, "rights", started1, stopping)
+}
+
+func TestDaemonLiveRestartReusesSameSessionTopic(t *testing.T) {
+	f := newDaemon(t)
+	oldKey := sessionKey("p1", "term-old", "session-live")
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+	topic, err := f.tg.CreateTopic(context.Background(), "reviewer", domain.StatusWorking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+	f.tg.Reset()
+	f.herdr.SetAgents([]domain.Agent{oldAgent})
+	f.start(t)
+	f.waitCalls(t, 2)
+	waitFor(t, "initial bridge event", func() bool { return f.bridge.Handled() >= 1 })
+	assertCalls(t, f.tg, "rights", started1)
+
+	current := oldAgent
+	current.Key.TerminalID = "term-new"
+	f.herdr.SetAgents([]domain.Agent{current})
+	f.herdr.Push(domain.HerdrEvent{Kind: domain.StreamReset})
+	waitFor(t, "restart appeared and gone events", func() bool { return f.bridge.Handled() >= 3 })
+	assertCalls(t, f.tg, "rights", started1)
+	if len(f.rec.Mapping().Topics) != 1 {
+		t.Fatalf("mapping entries after restart = %d", len(f.rec.Mapping().Topics))
+	}
+	entry, ok := f.rec.Mapping().TopicFor(current.Key)
+	if !ok || entry.ThreadID != topic.ThreadID {
+		t.Fatalf("live restart mapping = %+v ok=%v, want thread %d", entry, ok, topic.ThreadID)
+	}
+	if saved := f.store.Saved(); saved == nil {
+		t.Fatal("live restart reassociation was not persisted")
+	} else if _, ok := saved.TopicFor(current.Key); !ok {
+		t.Fatal("live restart save retained the old key")
+	}
+
+	if err := f.stop(t); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	assertCalls(t, f.tg, "rights", started1, stopping)
+}
+
 func TestDaemonRightsLostAndRegained(t *testing.T) {
 	f := newDaemon(t)
 	f.tg.SetRights(domain.Rights{IsForum: true, IsAdmin: true, CanManageTopics: false}, nil)

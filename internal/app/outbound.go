@@ -68,6 +68,7 @@ type outbound struct {
 	fold func() int
 
 	deb        *debouncer
+	threads    map[domain.Key]int
 	lastPosted map[domain.Key]string // SHA-256 of the last screen posted per key
 	// keyboards holds the latest button set per agent: which message
 	// carries it and which options it offers. Only the latest keyboard
@@ -219,6 +220,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		fold:         fold,
 		log:          log,
 		deb:          newDebouncer(clock, screenSettle, log),
+		threads:      map[domain.Key]int{},
 		lastPosted:   map[domain.Key]string{},
 		keyboards:    map[domain.Key]keyboard{},
 		announced:    map[domain.Key]bool{},
@@ -399,6 +401,16 @@ func (o *outbound) Due() <-chan domain.Key { return o.deb.Due() }
 // cleaned up by Forget, which the bridge calls with a context.
 func (o *outbound) Observe(ev AgentEvent) {
 	key := ev.Agent.Key
+	if ev.Kind == AgentAppeared && ev.ReassociatedFrom != nil {
+		o.reassociateState(*ev.ReassociatedFrom, ev.Agent)
+	}
+	if ev.Kind == AgentGone {
+		delete(o.threads, key)
+	} else {
+		if entry, ok := o.topics.Entry(key); ok {
+			o.threads[key] = entry.ThreadID
+		}
+	}
 	o.observeTurn(ev)
 	if ev.Agent.Status != domain.StatusBlocked || ev.Kind == AgentGone {
 		delete(o.announced, key)
@@ -431,6 +443,31 @@ func (o *outbound) Observe(ev AgentEvent) {
 		}
 		o.deb.Cancel(key)
 	}
+}
+
+// reassociateState carries in-memory screen, dialog and turn state when the
+// reconciler has already moved the same thread to a replacement key.
+func (o *outbound) reassociateState(from domain.Key, next domain.Agent) {
+	entry, ok := o.topics.Entry(next.Key)
+	if !ok || o.threads[from] != entry.ThreadID {
+		return
+	}
+	_, hasCapture := o.captures[from]
+	timerMoved := o.deb.Move(from, next.Key)
+	o.turnDeb.Cancel(from)
+	moveAgentState(o.lastPosted, from, next.Key)
+	moveAgentState(o.keyboards, from, next.Key)
+	moveAgentState(o.announced, from, next.Key)
+	moveAgentState(o.turns, from, next.Key)
+	moveAgentState(o.captures, from, next.Key)
+	moveAgentState(o.refresh, from, next.Key)
+	moveAgentState(o.typing, from, next.Key)
+	delete(o.threads, from)
+	if hasCapture && !timerMoved {
+		o.deb.ScheduleAfter(next.Key, 0)
+	}
+	o.log.Debug("outbound state reassociated", slog.String("old_key", from.String()),
+		slog.String("new_key", next.Key.String()), slog.Int("thread_id", entry.ThreadID))
 }
 
 // Forget drops everything kept for an exited agent: the pending timer, the

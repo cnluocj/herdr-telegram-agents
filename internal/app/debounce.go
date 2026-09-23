@@ -17,8 +17,13 @@ type debouncer struct {
 	log   *slog.Logger
 
 	mu      sync.Mutex
-	pending map[domain.Key]chan struct{} // cancel channel per armed timer
+	pending map[domain.Key]scheduledEdit
 	due     chan domain.Key
+}
+
+type scheduledEdit struct {
+	cancel chan struct{}
+	dueAt  time.Time
 }
 
 func newDebouncer(clock domain.Clock, delay time.Duration, log *slog.Logger) *debouncer {
@@ -26,7 +31,7 @@ func newDebouncer(clock domain.Clock, delay time.Duration, log *slog.Logger) *de
 		clock:   clock,
 		delay:   delay,
 		log:     log,
-		pending: map[domain.Key]chan struct{}{},
+		pending: map[domain.Key]scheduledEdit{},
 		due:     make(chan domain.Key, 256),
 	}
 }
@@ -41,11 +46,11 @@ func (d *debouncer) Schedule(key domain.Key) { d.ScheduleAfter(key, d.delay) }
 func (d *debouncer) ScheduleAfter(key domain.Key, delay time.Duration) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if cancel, ok := d.pending[key]; ok {
-		close(cancel)
+	if timer, ok := d.pending[key]; ok {
+		close(timer.cancel)
 	}
 	cancel := make(chan struct{})
-	d.pending[key] = cancel
+	d.pending[key] = scheduledEdit{cancel: cancel, dueAt: d.clock.Now().Add(delay)}
 	timer := d.clock.After(delay)
 	d.log.Debug("edit scheduled", slog.String("key", key.String()), slog.Int64("delay_ms", delay.Milliseconds()))
 	go func() {
@@ -55,7 +60,7 @@ func (d *debouncer) ScheduleAfter(key domain.Key, delay time.Duration) {
 			return
 		}
 		d.mu.Lock()
-		if d.pending[key] != cancel {
+		if d.pending[key].cancel != cancel {
 			d.mu.Unlock()
 			return
 		}
@@ -69,13 +74,40 @@ func (d *debouncer) ScheduleAfter(key domain.Key, delay time.Duration) {
 func (d *debouncer) Cancel(key domain.Key) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	cancel, ok := d.pending[key]
+	timer, ok := d.pending[key]
 	if !ok {
 		return false
 	}
-	close(cancel)
+	close(timer.cancel)
 	delete(d.pending, key)
 	d.log.Debug("edit cancelled", slog.String("key", key.String()))
+	return true
+}
+
+// Move transfers a pending timer to a new identity key while preserving its
+// remaining delay.
+func (d *debouncer) Move(from, to domain.Key) bool {
+	if from == to {
+		return false
+	}
+	d.mu.Lock()
+	timer, ok := d.pending[from]
+	if !ok {
+		d.mu.Unlock()
+		return false
+	}
+	remaining := timer.dueAt.Sub(d.clock.Now())
+	close(timer.cancel)
+	delete(d.pending, from)
+	if prior, exists := d.pending[to]; exists {
+		close(prior.cancel)
+		delete(d.pending, to)
+	}
+	d.mu.Unlock()
+	if remaining < 0 {
+		remaining = 0
+	}
+	d.ScheduleAfter(to, remaining)
 	return true
 }
 
@@ -85,11 +117,11 @@ func (d *debouncer) Drain() []domain.Key {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	keys := make([]domain.Key, 0, len(d.pending))
-	for key, cancel := range d.pending {
-		close(cancel)
+	for key, timer := range d.pending {
+		close(timer.cancel)
 		keys = append(keys, key)
 	}
-	d.pending = map[domain.Key]chan struct{}{}
+	d.pending = map[domain.Key]scheduledEdit{}
 	sortKeys(keys)
 	return keys
 }

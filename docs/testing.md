@@ -157,6 +157,53 @@ Telegram group on a phone.
 - [ ] **Doctor**: the doctor action opens the overlay with eight ✓ lines (`operator chat` among them, and `pin messages yes` in the group line) and `8 ok, 0 warnings, 0 failures` (2026-09-03, `v0.3.0-1-gfb4d386-dirty`, seven lines then: the pane run directly and the action from Herdr both green against the real group and Herdr 0.7.5); stop the daemon → `daemon` shows `!` not running; start it again; a throwaway copy of `config.json` with a wrong token shows `✗ telegram: token rejected` (restore the file)
 - [x] **Send test message**: the action posts a 🔔 message into General and reports `send-test: delivered to General (message N)` (2026-09-03, `v0.3.0-1-gfb4d386-dirty`, message 980); with the daemon stopped it still works (by design: the action never talks to the daemon)
 
+## Stable topics across Herdr restarts (v0.10.3)
+
+The automated tests cover the session digest, version-1 mapping migration,
+one-to-one candidate selection, restart event ordering, inbound and callback
+routing, and the no-extra-topic-call path. Run these phone and existing-state
+checks before publishing; record the date and only redacted thread/count
+evidence here.
+
+Automated gates for this change passed on 2026-09-23: `gofmt`, `go vet ./...`,
+`staticcheck ./...`, `go test -race ./...`, `make lint` (including the import
+gate and all five release cross-builds), and
+`sh scripts/check-version.sh v0.10.3`. The controlled live restart check is
+pending: `herdr --help` lists no restart-only command, and the available server
+stop or Herdr update actions risk interrupting the active agent sessions (the
+update also installs a new Herdr version). No release-specific thread/count,
+reply-routing, or phone icon/notice evidence was collected.
+
+- [ ] **Same-session restart:** record the live thread ids and mapping entry
+  count, restart Herdr without starting a new agent session, and confirm the
+  same threads and count remain. Check that no topic create/close notice
+  appears, then reply in a retained topic and press one of its existing
+  buttons.
+- [ ] **Version-1 mapping with duplicate generations:** restore a copy of an
+  old mapping that has no `cwd` or `agent_kind` and has both a live and older
+  closed entry for one pane/name. Start the daemon and confirm it adopts the
+  sole eligible live thread, preserves the older topic, and writes mapping
+  version 2. Repeat with two eligible candidates and no sole live candidate
+  (both live or both closed); confirm it logs an ambiguity and does not attach
+  either old thread arbitrarily.
+- [ ] **Muted topic:** close a live topic by hand, restart Herdr with the same
+  session, and confirm the topic remains muted without an icon edit or screen
+  post. Reopen it by hand and confirm the current name/icon returns.
+- [ ] **New session:** start or resume an agent so Herdr reports a different
+  non-empty `agent_session`; confirm it receives a new topic and the previous
+  topic is marked exited and closed. If the agent has no session identity,
+  record whether the documented unique directory/name fallback applied.
+- [ ] **Phone icon and notice:** on Telegram Desktop and a phone, change the
+  retained agent's status. Confirm the icon updates while the service notice
+  is visible and stays current after the configured 20-second deletion. Also
+  verify `/options` → Topics → `Keep icon notices for` → `Keep`, then restore
+  `20s`.
+- [ ] **Release assets:** after the tag workflow finishes, confirm these six
+  assets exist: `herdr-tg_darwin_amd64`, `herdr-tg_darwin_arm64`,
+  `herdr-tg_linux_amd64`, `herdr-tg_linux_arm64`,
+  `herdr-tg_windows_amd64.exe`, and `checksums.txt`. Then run
+  `sh scripts/verify-install.sh 0.10.3 all`.
+
 ## Resilience
 
 - [ ] **Herdr restart**: quit and reopen Herdr; the daemon logs `herdr stream reset` and reconciles within one reconcile interval, with no duplicate topics

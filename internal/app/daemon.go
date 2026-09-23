@@ -498,6 +498,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 					return err
 				}
 			}
+			if from, ok := d.reconciler.TakeReassociatedFrom(ev.Agent.Key); ok {
+				ev.ReassociatedFrom = &from
+			}
 			d.capture.Observe(ev)
 			d.dashboard.Observe(ev)
 			d.bridge.Submit(ev)
@@ -633,6 +636,9 @@ func (d *Daemon) replay(ctx context.Context, force bool) error {
 			if err := d.handleErr(ctx, err); err != nil {
 				return err
 			}
+		}
+		if from, ok := d.reconciler.TakeReassociatedFrom(ev.Agent.Key); ok {
+			ev.ReassociatedFrom = &from
 		}
 	}
 	if err := d.reconciler.Flush(ctx); err != nil {

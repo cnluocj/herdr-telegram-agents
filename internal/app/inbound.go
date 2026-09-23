@@ -396,6 +396,27 @@ func (i *inbound) Forget(key domain.Key) {
 	}
 }
 
+// Reassociate carries pending inbound work to the replacement key of a
+// retained topic. The topic thread and message IDs do not change.
+func (i *inbound) Reassociate(from, to domain.Key) {
+	if from == to {
+		return
+	}
+	_, hasPending := i.pending[from]
+	timerMoved := i.deb.Move(from, to)
+	moveAgentState(i.pending, from, to)
+	if hasPending && !timerMoved {
+		i.deb.ScheduleAfter(to, 0)
+	}
+	moveAgentState(i.closing, from, to)
+	for _, a := range i.albums {
+		if a.key == from {
+			a.key = to
+		}
+	}
+	i.log.Debug("inbound state reassociated", slog.String("old_key", from.String()), slog.String("new_key", to.String()))
+}
+
 // forward types a Claude Code command into the agent when it is waiting at
 // its prompt and arms the follow-up that posts the resulting screen. A
 // working or blocked agent gets a refusal instead: the text would land in
@@ -1039,6 +1060,9 @@ func (i *inbound) fetch(ctx context.Context, key domain.Key, at domain.TopicAtta
 // InboxFinished prompts the agent with the saved paths and tells the
 // operator about failures. Only fatal Telegram errors are returned.
 func (i *inbound) InboxFinished(ctx context.Context, r inboxResult) error {
+	if key, ok := i.topics.KeyForThread(r.threadID); ok {
+		r.key = key
+	}
 	msg := domain.TopicMessage{ThreadID: r.threadID, MessageID: r.messageID}
 	elapsed := i.clock.Now().Sub(r.started).Milliseconds()
 	if len(r.paths) == 0 {

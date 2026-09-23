@@ -21,7 +21,9 @@ open topic shows a Claude Code question you can answer from the phone.*
 ## What you get
 
 - **A topic per agent**, named like the Agents panel row (`V3Jobs · claude`),
-  created when the agent appears and reused after a restart.
+  reused across Herdr restarts when its session identity stays the same; a
+  different known session identity gets a new topic. Agents without a session
+  identity use a documented best-effort pane, directory and name match.
 - **Status at a glance**: the topic icon is ⚡ working, ✅ idle, ❓ blocked,
   🏆 done, 👀 unknown, 🏁 exited.
 - **Questions come to you**: when an agent gets blocked on a question or an
@@ -52,7 +54,7 @@ open topic shows a Claude Code question you can answer from the phone.*
 - **A daemon that looks after itself**: starts with Herdr, exits when Herdr
   is gone, heals topic drift on start and on `resync`.
 
-Version `0.10.1`. macOS and Linux are verified end to end; Windows is built and
+Version `0.10.3`. macOS and Linux are verified end to end; Windows is built and
 unit-tested on every change but has not been run against a real Herdr yet.
 
 ## Requirements

@@ -24,8 +24,9 @@ type Reconciler struct {
 	clock   domain.Clock
 	log     *slog.Logger
 
-	deb    *debouncer
-	agents map[domain.Key]domain.Agent // last known agent per key, for fire-time diffs
+	deb          *debouncer
+	agents       map[domain.Key]domain.Agent // last known agent per key, for fire-time diffs
+	reassociated map[domain.Key]reassociatedTopic
 	// rightsLost pauses writes while the bot cannot manage topics; paused
 	// reads the operator's sync switch; quiet reads the presence tracker
 	// (operator at the desk with topic edits held). Any of them blocks
@@ -46,6 +47,11 @@ type Reconciler struct {
 	view *topicView
 }
 
+type reassociatedTopic struct {
+	from     domain.Key
+	threadID int
+}
+
 // NewReconciler wires the reconciler around a loaded mapping. herdr is
 // used only to mirror operator renames back to the agent.
 func NewReconciler(tg domain.TelegramGateway, herdr domain.HerdrGateway, store domain.MappingStore, mapping *domain.Mapping, opts *Options, clock domain.Clock, log *slog.Logger) *Reconciler {
@@ -57,17 +63,18 @@ func NewReconciler(tg domain.TelegramGateway, herdr domain.HerdrGateway, store d
 		paused = func() bool { return !opts.SyncEnabled() }
 	}
 	r := &Reconciler{
-		tg:      tg,
-		herdr:   herdr,
-		store:   store,
-		mapping: mapping,
-		clock:   clock,
-		log:     log,
-		deb:     newDebouncer(clock, editDebounce, log),
-		agents:  map[domain.Key]domain.Agent{},
-		paused:  paused,
-		quiet:   func() bool { return false },
-		view:    newTopicView(),
+		tg:           tg,
+		herdr:        herdr,
+		store:        store,
+		mapping:      mapping,
+		clock:        clock,
+		log:          log,
+		deb:          newDebouncer(clock, editDebounce, log),
+		agents:       map[domain.Key]domain.Agent{},
+		reassociated: map[domain.Key]reassociatedTopic{},
+		paused:       paused,
+		quiet:        func() bool { return false },
+		view:         newTopicView(),
 	}
 	r.view.publish(mapping)
 	return r
@@ -166,12 +173,16 @@ func (r *Reconciler) SetReadOnly(ro bool) {
 
 // Handle applies one registry event.
 func (r *Reconciler) Handle(ctx context.Context, ev AgentEvent) error {
+	r.reassociated = map[domain.Key]reassociatedTopic{}
 	key := ev.Agent.Key
 	r.log.Debug("reconcile event", slog.String("kind", string(ev.Kind)), slog.String("key", key.String()),
 		slog.String("label", ev.Agent.Label()), slog.String("status", string(ev.Agent.Status)))
 	switch ev.Kind {
 	case AgentAppeared, AgentChanged:
 		r.agents[key] = ev.Agent
+		if err := r.reassociate(ctx, []domain.Agent{ev.Agent}); err != nil {
+			return err
+		}
 		entry, ok := r.mapping.TopicFor(key)
 		if !ok || !entry.Status.Live() {
 			return r.create(ctx, ev.Agent)
@@ -189,6 +200,22 @@ func (r *Reconciler) Handle(ctx context.Context, ev AgentEvent) error {
 	default:
 		return nil
 	}
+}
+
+// TakeReassociatedFrom returns the old key when Handle moved that agent's
+// existing topic and kept the same Telegram thread. A recreated/missing
+// topic does not qualify.
+func (r *Reconciler) TakeReassociatedFrom(key domain.Key) (domain.Key, bool) {
+	link, ok := r.reassociated[key]
+	delete(r.reassociated, key)
+	if !ok {
+		return domain.Key{}, false
+	}
+	entry, ok := r.mapping.TopicFor(key)
+	if !ok || entry.ThreadID != link.threadID {
+		return domain.Key{}, false
+	}
+	return link.from, true
 }
 
 // Fire runs the debounced edit for key.
@@ -242,6 +269,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, live []domain.Agent) error {
 		liveSet[a.Key] = struct{}{}
 		r.agents[a.Key] = a
 	}
+	r.reassociated = map[domain.Key]reassociatedTopic{}
+	reassociateErr := r.reassociate(ctx, live)
+	r.reassociated = map[domain.Key]reassociatedTopic{}
+	if reassociateErr != nil {
+		return reassociateErr
+	}
 	for _, key := range r.mapping.Orphans(liveSet) {
 		r.deb.Cancel(key)
 		if err := r.exit(ctx, key); err != nil {
@@ -291,13 +324,92 @@ func (r *Reconciler) create(ctx context.Context, a domain.Agent) error {
 	return r.createTopic(ctx, a)
 }
 
-// revive continues a returning agent in its old topic. The key is pane plus
-// terminal, so the same key after an exit means the agent was restarted in
-// place (claude --resume): the finished topic is reopened, unmuted and
-// refreshed rather than duplicated. Only a topic Telegram no longer has is
-// replaced by a new one.
+func (r *Reconciler) reassociate(ctx context.Context, live []domain.Agent) error {
+	plan := r.mapping.PlanReassociation(live)
+	for _, ambiguity := range plan.Ambiguous {
+		r.log.Warn("topic reassociation ambiguous",
+			slog.String("pane", ambiguity.LiveKey.PaneID),
+			slog.Int("candidate_count", ambiguity.CandidateCount),
+			slog.String("reason", string(ambiguity.Reason)))
+	}
+	if len(plan.Assignments) == 0 {
+		return nil
+	}
+	if err := r.mapping.ApplyReassociation(plan); err != nil {
+		r.log.Error("topic reassociation could not be applied", slog.String("err", err.Error()))
+		return fmt.Errorf("apply topic reassociation: %w", err)
+	}
+
+	liveByKey := make(map[domain.Key]domain.Agent, len(live))
+	for _, a := range live {
+		liveByKey[a.Key] = a
+	}
+	changed := false
+	for _, assignment := range plan.Assignments {
+		if assignment.From != assignment.To {
+			r.deb.Cancel(assignment.From)
+			delete(r.agents, assignment.From)
+		}
+		entry, ok := r.mapping.TopicFor(assignment.To)
+		if !ok {
+			continue
+		}
+		if assignment.From != assignment.To {
+			r.reassociated[assignment.To] = reassociatedTopic{from: assignment.From, threadID: entry.ThreadID}
+		}
+		r.log.Debug("topic reassociation candidate selected",
+			slog.String("reason", string(assignment.Reason)),
+			slog.String("old_key", assignment.From.String()),
+			slog.String("new_key", assignment.To.String()),
+			slog.Int("thread_id", entry.ThreadID))
+		if assignment.From != assignment.To {
+			changed = true
+		}
+		if a, ok := liveByKey[assignment.To]; ok && r.mapping.UpdateMetadata(assignment.To, a) {
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if persisted := r.save(ctx); !persisted {
+		for _, assignment := range plan.Assignments {
+			if assignment.From == assignment.To {
+				continue
+			}
+			entry, _ := r.mapping.TopicFor(assignment.To)
+			r.log.Warn("topic reassociation is not durable",
+				slog.String("old_key", assignment.From.String()),
+				slog.String("new_key", assignment.To.String()),
+				slog.String("reason", string(assignment.Reason)),
+				slog.Int("thread_id", entry.ThreadID))
+		}
+		return nil
+	}
+	for _, assignment := range plan.Assignments {
+		if assignment.From == assignment.To {
+			continue
+		}
+		entry, _ := r.mapping.TopicFor(assignment.To)
+		r.log.Info("topic adopted after agent reassociation",
+			slog.String("old_key", assignment.From.String()),
+			slog.String("new_key", assignment.To.String()),
+			slog.String("reason", string(assignment.Reason)),
+			slog.Int("thread_id", entry.ThreadID))
+	}
+	return nil
+}
+
+// revive continues a returning agent in its old topic. A matching session
+// can be reassociated across terminal changes; its finished topic is reopened
+// and refreshed rather than duplicated. Only a topic Telegram no longer has
+// is replaced by a new one.
 func (r *Reconciler) revive(ctx context.Context, a domain.Agent, entry *domain.TopicEntry) error {
 	key := a.Key
+	if entry.Muted {
+		r.log.Info("agent returned, topic remains muted", slog.String("key", key.String()), slog.Int("thread", entry.ThreadID))
+		return nil
+	}
 	r.log.Info("agent returned, reusing its topic", slog.String("key", key.String()), slog.Int("thread", entry.ThreadID),
 		slog.Bool("closed", entry.Closed), slog.Bool("muted", entry.Muted))
 	if entry.Closed {
@@ -311,7 +423,6 @@ func (r *Reconciler) revive(ctx context.Context, a domain.Agent, entry *domain.T
 		}
 	}
 	now := r.clock.Now()
-	r.mapping.Unmute(key, now)
 	r.mapping.MarkReopened(key, now)
 	r.save(ctx)
 	// The entry still says exited, which Diff treats as final, so the
@@ -322,6 +433,12 @@ func (r *Reconciler) revive(ctx context.Context, a domain.Agent, entry *domain.T
 		patch.Name = &name
 	}
 	if err := r.tg.EditTopic(ctx, entry.ThreadID, patch); err != nil {
+		if errors.Is(err, domain.ErrTopicGone) {
+			r.log.Warn("old topic gone, creating a new one", slog.String("key", key.String()), slog.Int("thread", entry.ThreadID))
+			r.mapping.Forget(key)
+			r.save(ctx)
+			return r.createTopic(ctx, a)
+		}
 		return r.fail(ctx, key, "editForumTopic", err)
 	}
 	r.mapping.Apply(key, patch, r.clock.Now())
@@ -457,12 +574,16 @@ func (r *Reconciler) OnTopicReopened(ctx context.Context, threadID int) error {
 		r.log.Debug("topic reopened for unknown thread", slog.Int("thread", threadID))
 		return nil
 	}
+	entry, _ := r.mapping.TopicFor(key)
 	r.mapping.Unmute(key, r.clock.Now())
 	r.mapping.MarkReopened(key, r.clock.Now())
 	r.save(ctx)
 	r.log.Info("topic unmuted", slog.String("key", key.String()), slog.Int("thread_id", threadID))
-	if _, live := r.agents[key]; live {
+	if a, live := r.agents[key]; live {
 		r.deb.Cancel(key)
+		if !entry.Status.Live() {
+			return r.revive(ctx, a, entry)
+		}
 		return r.forced(func() error { return r.edit(ctx, key) })
 	}
 	return r.finish(ctx, key)
@@ -624,11 +745,14 @@ func (r *Reconciler) fail(ctx context.Context, key domain.Key, method string, er
 	}
 }
 
-func (r *Reconciler) save(ctx context.Context) {
-	r.view.publish(r.mapping)
+func (r *Reconciler) save(ctx context.Context) bool {
 	if err := r.store.Save(ctx, r.mapping); err != nil {
 		r.log.Error("mapping save failed", slog.String("err", err.Error()))
+		r.view.publish(r.mapping)
+		return false
 	}
+	r.view.publish(r.mapping)
+	return true
 }
 
 func sortKeys(keys []domain.Key) {

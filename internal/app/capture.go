@@ -82,6 +82,14 @@ func (c *Capture) Observe(ev AgentEvent) {
 		c.log.Debug("history dropped", slog.String("key", key.String()))
 		return
 	}
+	if from := ev.ReassociatedFrom; from != nil {
+		c.moveHistory(*from, key)
+		moveAgentState(c.last, *from, key)
+		moveAgentState(c.source, *from, key)
+		moveAgentState(c.status, *from, key)
+		moveAgentState(c.left, *from, key)
+		c.log.Debug("history reassociated", slog.String("old_key", from.String()), slog.String("new_key", key.String()))
+	}
 	prev, known := c.status[key]
 	cur := ev.Agent.Status
 	c.status[key] = cur
@@ -109,6 +117,18 @@ func (c *Capture) Observe(ev AgentEvent) {
 		c.left[key] = c.clock.Now()
 		c.log.Debug("capture grace started", slog.String("key", key.String()), slog.String("to", string(cur)))
 	}
+}
+
+func (c *Capture) moveHistory(from, to domain.Key) {
+	previous, hadPrevious := c.hist[from]
+	current, hadCurrent := c.hist[to]
+	if hadPrevious && hadCurrent {
+		previous.Append(current.Lines())
+		c.hist[to] = previous
+		delete(c.hist, from)
+		return
+	}
+	moveAgentState(c.hist, from, to)
 }
 
 // Run reads the screens of working agents on every tick until ctx is done.

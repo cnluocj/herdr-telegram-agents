@@ -208,6 +208,9 @@ func (b *Bridge) handle(ctx context.Context, job any) {
 	case AgentEvent:
 		b.log.Debug("bridge job", slog.String("kind", "agent_event"), slog.String("event", string(j.Kind)), slog.String("key", j.Agent.Key.String()))
 		b.out.Observe(j)
+		if j.ReassociatedFrom != nil {
+			b.in.Reassociate(*j.ReassociatedFrom, j.Agent.Key)
+		}
 		if j.Kind == AgentGone {
 			b.in.Forget(j.Agent.Key)
 			b.run(ctx, "forget", func(ctx context.Context) error { return b.out.Forget(ctx, j.Agent.Key) })

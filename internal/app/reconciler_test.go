@@ -1,8 +1,10 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,11 @@ func (f *recFixture) fireDue(t *testing.T, want int) {
 		t.Fatalf("unexpected extra due key %v", key)
 	case <-time.After(50 * time.Millisecond):
 	}
+}
+
+func sessionKey(pane, terminal, value string) domain.Key {
+	digest := (domain.SessionTuple{Source: "test", Agent: "codex", Kind: "id", Value: value}).Digest()
+	return domain.Key{PaneID: pane, TerminalID: terminal, SessionDigest: digest}
 }
 
 func assertCalls(t *testing.T, tg *testkit.FakeTelegram, want ...string) {
@@ -574,6 +581,210 @@ func TestReconcilerRenameIgnoredOrFailed(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
+func TestReconcilerReassociatesSameSessionBeforeCreateOrOrphan(t *testing.T) {
+	for _, mode := range []string{"reconcile", "appeared"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newRec(t)
+			oldKey := sessionKey("p1", "term-old", "session-1")
+			oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+			entry := f.rec.Mapping().Link(oldKey, domain.Topic{ThreadID: 101, Name: "reviewer"}, oldAgent, t0)
+			newAgent := oldAgent
+			newAgent.Key.TerminalID = "term-new"
+
+			if mode == "reconcile" {
+				if err := f.rec.Reconcile(f.ctx, []domain.Agent{newAgent}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				f.handle(t, app.AgentAppeared, newAgent)
+			}
+			assertCalls(t, f.tg)
+			if _, ok := f.rec.Mapping().TopicFor(oldKey); ok {
+				t.Fatal("old key remained after reassociation")
+			}
+			got, ok := f.rec.Mapping().TopicFor(newAgent.Key)
+			if !ok || got != entry || got.ThreadID != 101 || len(f.rec.Mapping().Topics) != 1 {
+				t.Fatalf("reassociated entry = %+v ok=%v entries=%d", got, ok, len(f.rec.Mapping().Topics))
+			}
+			saved := f.store.Saved()
+			if saved == nil {
+				t.Fatal("reassociation was not saved")
+			}
+			if _, ok := saved.TopicFor(newAgent.Key); !ok {
+				t.Fatal("saved mapping still uses the old key")
+			}
+		})
+	}
+}
+
+func TestReconcilerNewSessionKeepsExitThenCreateLifecycle(t *testing.T) {
+	f := newRec(t)
+	oldKey := sessionKey("p1", "term-old", "session-old")
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+	topic, err := f.tg.CreateTopic(f.ctx, "reviewer", domain.StatusWorking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+	f.tg.Reset()
+
+	f.handle(t, app.AgentGone, domain.Agent{Key: oldKey, Name: oldAgent.Name, Kind: oldAgent.Kind, Cwd: oldAgent.Cwd, Status: domain.StatusExited})
+	newAgent := oldAgent
+	newAgent.Key = sessionKey("p1", "term-new", "session-new")
+	f.handle(t, app.AgentAppeared, newAgent)
+
+	assertCalls(t, f.tg, "edit:101:status=exited", "close:101", "create:reviewer:working")
+	oldEntry, oldOK := f.rec.Mapping().TopicFor(oldKey)
+	newEntry, newOK := f.rec.Mapping().TopicFor(newAgent.Key)
+	if !oldOK || !oldEntry.Closed || oldEntry.Status != domain.StatusExited || !newOK || newEntry.ThreadID != 102 {
+		t.Fatalf("old/new entries = %+v (%v), %+v (%v)", oldEntry, oldOK, newEntry, newOK)
+	}
+}
+
+func TestReconcilerRevivesReassociatedExitedTopic(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		editErr   error
+		wantCalls []string
+		wantNew   bool
+	}{
+		{
+			name:      "edit succeeds",
+			wantCalls: []string{"reopen:101", "edit:101:status=working"},
+		},
+		{
+			name:      "topic disappeared during refresh",
+			editErr:   domain.ErrTopicGone,
+			wantCalls: []string{"reopen:101", "edit:101:status=working", "create:reviewer:working"},
+			wantNew:   true,
+		},
+		{
+			name:      "temporary edit failure",
+			editErr:   errors.New("temporary telegram failure"),
+			wantCalls: []string{"reopen:101", "edit:101:status=working"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRec(t)
+			oldKey := sessionKey("p1", "term-old", "session-2")
+			oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+			topic, err := f.tg.CreateTopic(f.ctx, "reviewer", domain.StatusExited)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.tg.CloseTopic(f.ctx, topic.ThreadID); err != nil {
+				t.Fatal(err)
+			}
+			entry := f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+			entry.Status = domain.StatusExited
+			entry.Closed = true
+			f.tg.Reset()
+			if tc.editErr != nil {
+				f.tg.FailNext("edit", tc.editErr)
+			}
+
+			newAgent := oldAgent
+			newAgent.Key.TerminalID = "term-new"
+			if err := f.rec.Reconcile(f.ctx, []domain.Agent{newAgent}); err != nil {
+				t.Fatal(err)
+			}
+			assertCalls(t, f.tg, tc.wantCalls...)
+			got, ok := f.rec.Mapping().TopicFor(newAgent.Key)
+			if !ok {
+				t.Fatal("reassociated topic mapping was lost")
+			}
+			if tc.wantNew {
+				if got.ThreadID != 102 || got.Status != domain.StatusWorking || got.Closed {
+					t.Fatalf("replacement topic entry = %+v", *got)
+				}
+			} else if got.ThreadID != 101 {
+				t.Fatalf("topic was replaced after a non-gone result: %+v", *got)
+			}
+		})
+	}
+}
+
+func TestReconcilerRefreshesMetadataWithoutTopicCalls(t *testing.T) {
+	f := newRec(t)
+	key := domain.Key{PaneID: "p1", TerminalID: "t1"}
+	old := domain.Agent{Key: key, Name: "reviewer", Status: domain.StatusWorking}
+	f.rec.Mapping().Link(key, domain.Topic{ThreadID: 101, Name: "reviewer"}, old, t0)
+	current := old
+	current.Kind = "codex"
+	current.Cwd = "/work/repo"
+	f.handle(t, app.AgentAppeared, current)
+	assertCalls(t, f.tg)
+	entry, _ := f.rec.Mapping().TopicFor(key)
+	if entry.Cwd != current.Cwd || entry.AgentKind != current.Kind || f.store.SaveCount() != 1 {
+		t.Fatalf("metadata = %+v; saves = %d", entry, f.store.SaveCount())
+	}
+	f.handle(t, app.AgentAppeared, current)
+	assertCalls(t, f.tg)
+	if f.store.SaveCount() != 1 {
+		t.Fatalf("unchanged metadata caused another save: %d", f.store.SaveCount())
+	}
+}
+
+func TestReconcilerPreservesMuteAcrossReassociation(t *testing.T) {
+	f := newRec(t)
+	topic, err := f.tg.CreateTopic(f.ctx, "reviewer", domain.StatusWorking)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.tg.Reset()
+	oldKey := domain.Key{PaneID: "p1", TerminalID: "term-old"}
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+	topic.Closed = true
+	entry := f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+	entry.Status = domain.StatusExited
+	entry.Closed = true
+	entry.Muted = true
+	newKey := sessionKey("p1", "term-new", "session-1")
+	newAgent := oldAgent
+	newAgent.Key = newKey
+	f.handle(t, app.AgentAppeared, newAgent)
+	assertCalls(t, f.tg)
+	got, ok := f.rec.Mapping().TopicFor(newKey)
+	if !ok || got != entry || !got.Muted || !got.Closed || got.Status != domain.StatusExited {
+		t.Fatalf("muted reassociation = %+v ok=%v", got, ok)
+	}
+	if _, ok := f.rec.Mapping().TopicFor(oldKey); ok {
+		t.Fatal("old muted key remained after reassociation")
+	}
+	if err := f.rec.OnTopicReopened(f.ctx, 101); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, f.tg, "edit:101:status=working")
+	if got.Muted || got.Closed || got.Status != domain.StatusWorking {
+		t.Fatalf("operator reopen did not revive muted topic: %+v", *got)
+	}
+}
+
+func TestReconcilerSaveFailureDoesNotClaimDurableReassociation(t *testing.T) {
+	f := newRec(t)
+	oldKey := sessionKey("p1", "term-old", "session-1")
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusWorking}
+	f.rec.Mapping().Link(oldKey, domain.Topic{ThreadID: 101, Name: "reviewer"}, oldAgent, t0)
+	var logs bytes.Buffer
+	f.rec = app.NewReconciler(f.tg, f.herdr, f.store, f.rec.Mapping(), nil, f.clock, slog.New(slog.NewTextHandler(&logs, nil)))
+	f.store.Fail(errors.New("disk write failed"))
+	newAgent := oldAgent
+	newAgent.Key.TerminalID = "term-new"
+	if err := f.rec.Reconcile(f.ctx, []domain.Agent{newAgent}); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, f.tg)
+	if _, ok := f.rec.Mapping().TopicFor(newAgent.Key); !ok {
+		t.Fatal("in-memory mapping did not stay coherent after failed save")
+	}
+	if f.store.Saved() != nil || f.store.SaveCount() != 0 {
+		t.Fatal("failed reassociation was recorded as durable")
+	}
+	if !strings.Contains(logs.String(), "mapping save failed") || !strings.Contains(logs.String(), "topic reassociation is not durable") {
+		t.Fatalf("save failure was not clearly logged: %s", logs.String())
+	}
+}
+
 // TestReconcilerReusesTopicWhenKeyReturns: an agent that exits and comes
 // back under the same key (claude --resume in the same pane) continues in
 // its old topic, reopened and refreshed, instead of getting a second one.
@@ -596,7 +807,8 @@ func TestReconcilerReusesTopicWhenKeyReturns(t *testing.T) {
 	}
 
 	// The same after a muted exit: the operator closed the topic by hand,
-	// then the pane closed, then the agent came back.
+	// then the pane closed, then the agent came back. The mute remains until
+	// the operator reopens the topic.
 	f.tg.Reset()
 	if err := f.rec.OnTopicClosed(f.ctx, 101); err != nil {
 		t.Fatal(err)
@@ -604,9 +816,16 @@ func TestReconcilerReusesTopicWhenKeyReturns(t *testing.T) {
 	f.handle(t, app.AgentGone, agent("p1", "t1", "reviewer", domain.StatusExited))
 	assertCalls(t, f.tg)
 	f.handle(t, app.AgentAppeared, agent("p1", "t1", "reviewer", domain.StatusWorking))
-	assertCalls(t, f.tg, "reopen:101", "edit:101:status=working")
-	if entry, _ := f.rec.Mapping().TopicFor(a.Key); entry.Muted || entry.Closed || entry.Status != domain.StatusWorking {
+	assertCalls(t, f.tg)
+	if entry, _ := f.rec.Mapping().TopicFor(a.Key); !entry.Muted || !entry.Closed || entry.Status != domain.StatusExited {
 		t.Fatalf("entry after muted return = %+v", *entry)
+	}
+	if err := f.rec.OnTopicReopened(f.ctx, 101); err != nil {
+		t.Fatal(err)
+	}
+	assertCalls(t, f.tg, "edit:101:status=working")
+	if entry, _ := f.rec.Mapping().TopicFor(a.Key); entry.Muted || entry.Closed || entry.Status != domain.StatusWorking {
+		t.Fatalf("entry after operator reopen = %+v", *entry)
 	}
 
 	// Only when Telegram lost the old topic is a new one created.

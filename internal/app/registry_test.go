@@ -17,6 +17,13 @@ func agent(pane, term, name string, st domain.Status) domain.Agent {
 	return domain.Agent{Key: domain.Key{PaneID: pane, TerminalID: term}, Kind: "claude", Name: name, Status: st}
 }
 
+func sessionAgent(pane, term, value string) domain.Agent {
+	a := agent(pane, term, "reviewer", domain.StatusWorking)
+	a.Key.SessionDigest = (domain.SessionTuple{Source: "test", Agent: "claude", Kind: "id", Value: value}).Digest()
+	a.Cwd = "/work/repo"
+	return a
+}
+
 func kinds(evs []app.AgentEvent) []string {
 	out := make([]string, len(evs))
 	for i, ev := range evs {
@@ -59,13 +66,14 @@ func TestRegistrySnapshotDiff(t *testing.T) {
 		t.Fatalf("unchanged snapshot emitted %v", kinds(evs))
 	}
 
-	// A working directory is carried but never counts as a change.
+	// A working-directory change refreshes mapping metadata without changing
+	// the topic name or status.
 	withCwd := agent("p1", "t1", "a", domain.StatusWorking)
 	withCwd.Cwd = "/home/op/proj"
 	h.SetAgents([]domain.Agent{withCwd, agent("p2", "t2", "b", domain.StatusIdle)})
 	evs, _ = r.Snapshot(ctx)
-	if len(evs) != 0 {
-		t.Fatalf("cwd-only snapshot emitted %v", kinds(evs))
+	if got := kinds(evs); !equal(got, []string{"changed:p1/t1"}) {
+		t.Fatalf("cwd-only snapshot emitted %v", got)
 	}
 	if a, _ := r.Agent(domain.Key{PaneID: "p1", TerminalID: "t1"}); a.Cwd != "/home/op/proj" {
 		t.Fatalf("Cwd after snapshot = %q", a.Cwd)
@@ -87,6 +95,63 @@ func TestRegistrySnapshotDiff(t *testing.T) {
 	}
 	if len(r.Live()) != 0 {
 		t.Fatalf("Live after all gone = %v", r.Live())
+	}
+}
+
+func TestRegistryOrdersSameAgentReplacementBeforeGone(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		previous domain.Agent
+		next     domain.Agent
+		adopt    bool
+	}{
+		{
+			name:     "same known session",
+			previous: sessionAgent("p1", "term-old", "session-1"),
+			next:     sessionAgent("p1", "term-new", "session-1"),
+			adopt:    true,
+		},
+		{
+			name: "sessionless metadata fallback",
+			previous: func() domain.Agent {
+				a := agent("p1", "term-old", "reviewer", domain.StatusWorking)
+				a.Cwd = "/work/repo"
+				return a
+			}(),
+			next: func() domain.Agent {
+				a := agent("p1", "term-new", "reviewer", domain.StatusWorking)
+				a.Cwd = "/work/repo"
+				return a
+			}(),
+			adopt: true,
+		},
+		{
+			name:     "different known session",
+			previous: sessionAgent("p1", "term-old", "session-1"),
+			next:     sessionAgent("p1", "term-new", "session-2"),
+			adopt:    false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := testkit.NewFakeHerdr(nil)
+			r := app.NewRegistry(h, testkit.NewFakeClock(t0), nil)
+			h.SetAgents([]domain.Agent{tc.previous})
+			if _, err := r.Snapshot(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			h.SetAgents([]domain.Agent{tc.next})
+			evs, err := r.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{"gone:" + tc.previous.Key.String(), "appeared:" + tc.next.Key.String()}
+			if tc.adopt {
+				want = []string{"appeared:" + tc.next.Key.String(), "gone:" + tc.previous.Key.String()}
+			}
+			if got := kinds(evs); !equal(got, want) {
+				t.Fatalf("replacement events = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
