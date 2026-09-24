@@ -274,7 +274,8 @@ func TestSetupChoosesAmongSiblings(t *testing.T) {
 func TestSetupKeepsExistingConfig(t *testing.T) {
 	f := newSetup(t)
 	existing := domain.Config{Version: 1, BotToken: "old", ChatID: -5, ChatTitle: "Old", OperatorIDs: []int64{3}, LogLevel: "debug",
-		ClaudeProjectsDirs: []string{"~/.ccs/instances/*/projects"}, CodexSessionsDirs: []string{"~/.ccs/codex-instances/*/sessions"}}
+		ClaudeProjectsDirs: []string{"~/.ccs/instances/*/projects"}, CodexSessionsDirs: []string{"~/.ccs/codex-instances/*/sessions"},
+		BarkURL: "https://api.day.app/key"}
 	f.store.Set(existing)
 	f.ui.confirms = []bool{false}
 	r := result(t, f.run(context.Background()))
@@ -285,8 +286,8 @@ func TestSetupKeepsExistingConfig(t *testing.T) {
 		t.Fatal("kept config must not touch telegram or the store")
 	}
 
-	// Reconfiguring keeps the log level and the transcript folders but
-	// replaces everything else.
+	// Reconfiguring keeps the log level, the transcript folders and the
+	// Bark endpoint but replaces everything else.
 	f = newSetup(t)
 	f.store.Set(existing)
 	f.ui.confirms = []bool{true, true}
@@ -302,6 +303,9 @@ func TestSetupKeepsExistingConfig(t *testing.T) {
 	}
 	if strings.Join(r.cfg.ClaudeProjectsDirs, ",") != "~/.ccs/instances/*/projects" || strings.Join(r.cfg.CodexSessionsDirs, ",") != "~/.ccs/codex-instances/*/sessions" {
 		t.Fatalf("reconfigure lost the transcript folders: %v / %v", r.cfg.ClaudeProjectsDirs, r.cfg.CodexSessionsDirs)
+	}
+	if r.cfg.BarkURL != "https://api.day.app/key" {
+		t.Fatalf("reconfigure lost the bark endpoint: %q", r.cfg.BarkURL)
 	}
 }
 

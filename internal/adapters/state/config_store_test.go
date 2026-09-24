@@ -192,3 +192,27 @@ func TestConfigStoreTranscriptFolders(t *testing.T) {
 		t.Fatalf("empty folder lists written:\n%s", raw)
 	}
 }
+
+func TestConfigStoreBarkURL(t *testing.T) {
+	s := state.NewConfigStore(t.TempDir(), nil)
+	ctx := context.Background()
+	cfg := sampleConfig()
+	cfg.BarkURL = "https://api.day.app/key123"
+	if err := s.Save(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load(ctx)
+	if err != nil || got.BarkURL != "https://api.day.app/key123" {
+		t.Fatalf("bark url = %q, %v", got.BarkURL, err)
+	}
+	raw, _ := os.ReadFile(s.Path())
+	if !strings.Contains(string(raw), `"bark_url": "https://api.day.app/key123"`) {
+		t.Fatalf("file lacks bark_url:\n%s", raw)
+	}
+	if err := s.Save(ctx, sampleConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(s.Path()); strings.Contains(string(raw), "bark_url") {
+		t.Fatalf("empty bark_url written:\n%s", raw)
+	}
+}

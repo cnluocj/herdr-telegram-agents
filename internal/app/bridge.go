@@ -46,6 +46,9 @@ type Services struct {
 	// Config saves config.json when /observers changes the observer list;
 	// nil refuses the change with a notice.
 	Config domain.ConfigStore
+	// Bell rings the phone outside Telegram (Bark) with every done post
+	// and every new question; nil rings nothing.
+	Bell domain.Bell
 }
 
 // NewBridge wires the outbound and inbound use cases around the registry,
@@ -63,8 +66,18 @@ func NewBridge(cfg domain.Config, herdr domain.HerdrGateway, tg domain.TelegramG
 	topics := reconciler.topics()
 	// Every post of the bridge passes the redactor; the reconciler keeps
 	// the raw gateway because topic names are agent labels.
-	tg = newRedactingGateway(tg, domain.NewRedactor(cfg.BotToken), opts.RedactEnabled, log)
+	red := domain.NewRedactor(cfg.BotToken)
+	tg = newRedactingGateway(tg, red, opts.RedactEnabled, log)
 	out := newOutbound(herdr, tg, cfg.ChatID, cfg.OperatorIDs, topics, registry.Agent, registry.Live, capture, opts, svc.Replies, clock, log)
+	if svc.Bell != nil {
+		out.SetBell(svc.Bell, func(s string) string {
+			if !opts.RedactEnabled() {
+				return s
+			}
+			s, _ = red.Redact(s)
+			return s
+		})
+	}
 	in := newInbound(herdr, tg, topics, registry.Agent, registry.Live, out, opts, svc, cfg, clock, log)
 	b := &Bridge{
 		out:         out,

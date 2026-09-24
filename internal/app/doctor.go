@@ -324,6 +324,25 @@ func SendTest(ctx context.Context, insp domain.TelegramInspector, version string
 	return fmt.Sprintf("send-test: delivered to General (message %d)", id), nil
 }
 
+// RingTest pushes a test ring through the phone's bell (Bark) and returns
+// the sentence the send-test action adds; the error carries the reason.
+func RingTest(ctx context.Context, bell domain.Bell, version string, now time.Time, log *slog.Logger) (string, error) {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	title := notifyTitle
+	if version != "" {
+		title += " " + version
+	}
+	r := domain.Ring{Title: "🔔 " + title, Body: fmt.Sprintf("Test ring from the send-test action (%s)", now.UTC().Format("2006-01-02 15:04 UTC")), Group: notifyTitle}
+	if err := bell.Send(ctx, r); err != nil {
+		log.Warn("bark test failed", slog.String("err", err.Error()))
+		return "", fmt.Errorf("bark test failed: %s", failureReason(err))
+	}
+	log.Info("bark test rung")
+	return "bark: rung", nil
+}
+
 func sendTestReason(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrBotUnauthorized):

@@ -317,6 +317,32 @@ stale check and duplicate check. A turn typed in Herdr, or one whose
 `working` status the daemon never saw, is left alone. The log says `idle
 turn posted as done` at debug.
 
+### Ringing the phone through Bark
+
+When Telegram's own notifications do not reach the phone, the daemon can
+ring it through [Bark](https://github.com/Finb/Bark) (iOS) instead. Put the
+device's endpoint into `config.json` with the daemon stopped (the setup
+wizard keeps it):
+
+```json
+"bark_url": "https://api.day.app/<device key>"
+```
+
+Telegram keeps the content, Bark only rings: every time the topic gets a
+done post, and every question the topic post rang for, the phone gets a
+push with the status icon and the agent's label as title (`🏆 yimall · 1 ·
+claude`), the turn summary line as subtitle, the start of the reply (or the
+end of the screen, or the question's options) as body, and the link to that
+Telegram message, so a tap opens the full post. A question rings as
+time-sensitive with the alarm sound, so it breaks through Focus; a done post
+rings as an ordinary notification. The text passes `Redact secrets` before
+it is cut to what a push carries (about 2.4 KB). While quiet mode has you at
+the desk nothing rings; the catch-up on leaving rings the questions still
+open. The endpoint carries the device key and is treated like the bot
+token: it is never logged, and a failed push logs `bark ring failed` with
+the reason only. `Telegram Agents: send test message` rings a test push
+too and reports `bark: rung` or why it failed.
+
 ## Turns and reactions
 
 A **turn** is one exchange with an agent. It starts with the first
@@ -603,7 +629,7 @@ in `config.json`:
 
 | File | Location | Content |
 |------|----------|---------|
-| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level, the optional transcript folders (`claude_projects_dirs`, `codex_sessions_dirs`, see [Where transcripts are read](#where-transcripts-are-read)) |
+| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level, the optional transcript folders (`claude_projects_dirs`, `codex_sessions_dirs`, see [Where transcripts are read](#where-transcripts-are-read)), the optional Bark endpoint (`bark_url`, see [Ringing the phone through Bark](#ringing-the-phone-through-bark)) |
 | `mapping.json` | Herdr plugin state dir (`HERDR_PLUGIN_STATE_DIR`) | agent to topic mapping and the dashboard message id (`dashboard_message_id`); entries of exited agents stay until the topic cleanup deletes their topic, or beyond 500 entries |
 | `options.json` | config dir, mode 0600 | the `/options` choices |
 | `inbox/` | state dir, mode 0700, files 0600 | attachments sent to topics, swept daily after `Delete files after` |

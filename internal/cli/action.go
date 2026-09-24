@@ -107,7 +107,8 @@ func doAction(ctx context.Context, rc *runContext, pluginID, id string, sup supe
 
 // sendTest posts a test message into General straight from this process
 // through the light Telegram client, so it works with the daemon stopped
-// and never touches its polling.
+// and never touches its polling; with a Bark endpoint it rings the phone
+// too.
 func sendTest(ctx context.Context, rc *runContext) (string, error) {
 	env, err := wire.env()
 	if err != nil {
@@ -131,7 +132,18 @@ func sendTest(ctx context.Context, rc *runContext) (string, error) {
 		// The reason is already in the sentence; report it as the outcome
 		// rather than as a CLI failure so the notification reads cleanly.
 		rc.log.Warn("send-test failed", slog.String("err", err.Error()))
-		return err.Error(), nil
+		msg = err.Error()
+	}
+	// With a Bark endpoint the phone's bell is tested too, whatever the
+	// Telegram side answered.
+	if wire.ringTest != nil {
+		ring, err := wire.ringTest(sctx, cfg, rc.version, rc.log)
+		if err != nil {
+			ring = err.Error()
+		}
+		if ring != "" {
+			msg += "; " + ring
+		}
 	}
 	return msg, nil
 }

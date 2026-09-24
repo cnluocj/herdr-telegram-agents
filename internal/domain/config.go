@@ -36,6 +36,11 @@ type Config struct {
 	// (YYYY/MM/DD below each), the same way: empty means ~/.codex/sessions,
 	// plus $CODEX_HOME/sessions when the daemon runs with that variable.
 	CodexSessionsDirs []string
+	// BarkURL is the Bark endpoint with the device key
+	// (https://api.day.app/<key>): every done post and every new question
+	// also rings the phone there, with a link to the Telegram post. Empty
+	// means no Bark. A secret like the token: never logged.
+	BarkURL string
 }
 
 // Role is what a Telegram user may do with the bot.

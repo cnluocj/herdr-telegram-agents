@@ -105,6 +105,27 @@ type TurnMeta struct {
 	OutputTokens int
 }
 
+// Ring is one push to the operator's phone outside Telegram (Bark): the
+// alert, not the content. URL opens the Telegram post that holds the
+// content; Urgent marks a question, which rings through Focus with an
+// alarm sound.
+type Ring struct {
+	Title    string
+	Subtitle string
+	Body     string
+	URL      string
+	Group    string
+	Urgent   bool
+}
+
+// Bell pushes a Ring without blocking the caller; a failed delivery is
+// the adapter's to log. Send is the same push, waited for, for the
+// send-test action.
+type Bell interface {
+	Ring(ctx context.Context, r Ring)
+	Send(ctx context.Context, r Ring) error
+}
+
 // ReplySource finds the last reply of an agent outside Herdr, in the
 // agent's own session transcript. It returns ErrNoReply, wrapped with the
 // reason, whenever nothing usable exists; the caller then falls back to

@@ -71,6 +71,13 @@ type outbound struct {
 	// Telegram that Herdr ends as idle still gets its done post.
 	screenLines func() int
 	idleReply   func() bool
+	// bell rings the phone outside Telegram (Bark) for every done post and
+	// every question the topic rang for; nil rings nothing. redact is the
+	// posts' redactor, applied to a ring's text before it is cut to size;
+	// icons supplies the status emoji of the ring's title.
+	bell   domain.Bell
+	redact func(string) string
+	icons  func() domain.StatusIcons
 
 	deb        *debouncer
 	threads    map[domain.Key]int
@@ -191,6 +198,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 	fold := func() int { return defaultFoldLines }
 	screenLines := func() int { return doneLines }
 	idleReply := func() bool { return false }
+	icons := domain.DefaultStatusIcons
 	if opts != nil {
 		paused = func() bool { return !opts.SyncEnabled() }
 		doneMode = opts.PostsDone
@@ -203,6 +211,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		fold = opts.FoldAfter
 		screenLines = opts.ScreenLines
 		idleReply = opts.IdleReply
+		icons = opts.StatusIcons
 	}
 	if live == nil {
 		live = func() []domain.Agent { return nil }
@@ -229,6 +238,8 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		fold:         fold,
 		screenLines:  screenLines,
 		idleReply:    idleReply,
+		redact:       func(s string) string { return s },
+		icons:        icons,
 		log:          log,
 		deb:          newDebouncer(clock, screenSettle, log),
 		threads:      map[domain.Key]int{},
@@ -243,6 +254,15 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		captures:     map[domain.Key]pendingCapture{},
 		refresh:      map[domain.Key]int{},
 		typing:       map[domain.Key]typingWait{},
+	}
+}
+
+// SetBell wires the phone's bell; redact is applied to every ring's text
+// (nil keeps it as is). A nil bell rings nothing.
+func (o *outbound) SetBell(bell domain.Bell, redact func(string) string) {
+	o.bell = bell
+	if redact != nil {
+		o.redact = redact
 	}
 }
 
@@ -713,6 +733,7 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 	case notify && agent.Status == domain.StatusBlocked:
 		o.announced[key] = true
 	}
+	o.ringPhone(ctx, agent, entry.ThreadID, id, text, mode != domain.DoneScreen, footer, notify, force)
 	if mode != domain.DoneScreen {
 		o.log.Info("reply posted", slog.String("key", key.String()), slog.Int("thread_id", entry.ThreadID),
 			slog.String("mode", string(mode)), slog.Int("lines", strings.Count(text, "\n")+1), slog.Int("bytes", len(text)),
@@ -726,6 +747,28 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 		slog.Int("buttons", len(out.Buttons)), slog.Int("message_id", id), slog.Bool("notify", out.Notify), slog.Bool("paged", paged), slog.Bool("forced", force),
 		slog.Bool("footer", footer != ""))
 	return nil
+}
+
+// ringPhone copies a post to the phone's bell: every done post, and a
+// question when its topic post rang (notify); nothing while quiet mode
+// has the operator at the desk, unless forced by the catch-up. The text
+// is redacted first, then cut to what a notification carries.
+func (o *outbound) ringPhone(ctx context.Context, agent domain.Agent, threadID, messageID int, text string, reply bool, footer string, notify, force bool) {
+	if o.bell == nil || (o.quiet() && !force) {
+		return
+	}
+	link := messageLink(o.chatID, threadID, messageID)
+	icons := o.icons()
+	text = o.redact(text)
+	switch {
+	case agent.Status == domain.StatusDone:
+		o.bell.Ring(ctx, doneRing(agent, icons.Done, text, reply, footer, link))
+	case agent.Status == domain.StatusBlocked && notify:
+		o.bell.Ring(ctx, questionRing(agent, icons.Blocked, text, domain.ParseDialog(text), link))
+	default:
+		return
+	}
+	o.log.Debug("phone rung", slog.String("key", agent.Key.String()), slog.String("status", string(agent.Status)), slog.Int("message_id", messageID))
 }
 
 // page sends the question to every operator's private chat with a sound:

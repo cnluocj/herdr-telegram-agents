@@ -105,6 +105,7 @@ func (s *Setup) Run(ctx context.Context) (domain.Config, bool, error) {
 
 		ClaudeProjectsDirs: existing.ClaudeProjectsDirs,
 		CodexSessionsDirs:  existing.CodexSessionsDirs,
+		BarkURL:            existing.BarkURL,
 	}
 	if err := s.store.Save(ctx, cfg); err != nil {
 		return domain.Config{}, false, fmt.Errorf("save config: %w", err)

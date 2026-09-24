@@ -115,6 +115,30 @@ func TestActionSendTest(t *testing.T) {
 			t.Fatalf("notifications = %q", got)
 		}
 	})
+	t.Run("bark rings too", func(t *testing.T) {
+		env, _ := testEnv(t)
+		saveConfig(t, env)
+		insp := testkit.NewFakeInspector()
+		wire.buildInspector = func(domain.Config, *slog.Logger) (domain.TelegramInspector, error) { return insp, nil }
+		useFakes(t, &fakeSupervisor{}, &fakeOpener{})
+		var rang []string
+		wire.ringTest = func(_ context.Context, cfg domain.Config, version string, _ *slog.Logger) (string, error) {
+			rang = append(rang, cfg.BotToken)
+			return "bark: rung", nil
+		}
+		code, stdout, _ := runCLI(t, "action", "send-test")
+		if code != exitOK || !strings.Contains(stdout, "send-test: delivered to General (message 500); bark: rung") || len(rang) != 1 {
+			t.Fatalf("exit = %d, stdout = %q, rings = %v", code, stdout, rang)
+		}
+		// A failing bell is reported next to the Telegram outcome.
+		wire.ringTest = func(context.Context, domain.Config, string, *slog.Logger) (string, error) {
+			return "", errors.New("bark test failed: HTTP 400")
+		}
+		code, stdout, _ = runCLI(t, "action", "send-test")
+		if code != exitOK || !strings.Contains(stdout, "send-test: delivered to General (message 500); bark test failed: HTTP 400") {
+			t.Fatalf("exit = %d, stdout = %q", code, stdout)
+		}
+	})
 	t.Run("not configured", func(t *testing.T) {
 		_, rec := testEnv(t)
 		useFakes(t, &fakeSupervisor{}, &fakeOpener{})

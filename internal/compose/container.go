@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/permgps/herdr-telegram-agents/internal/adapters/bark"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/herdr"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/logging"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/state"
@@ -61,6 +62,34 @@ func RenderChecks(version string, checks []domain.Check) string {
 // the sentence the action reports.
 func SendTest(ctx context.Context, insp domain.TelegramInspector, version string, log *slog.Logger) (string, error) {
 	return app.SendTest(ctx, insp, version, time.Now(), log)
+}
+
+// RingTest pushes the send-test ring through Bark when config.json names
+// an endpoint; without one it reports nothing and no error.
+func RingTest(ctx context.Context, cfg domain.Config, version string, log *slog.Logger) (string, error) {
+	if cfg.BarkURL == "" {
+		return "", nil
+	}
+	bell, err := bark.New(cfg.BarkURL, log)
+	if err != nil {
+		return "", fmt.Errorf("bark test failed: %v", err)
+	}
+	return app.RingTest(ctx, bell, version, time.Now(), log)
+}
+
+// buildBell returns the Bark bell of config.json, or nil without an
+// endpoint; an unusable endpoint is logged (never repeated) and rings
+// nothing, the Telegram side runs as before.
+func buildBell(cfg domain.Config, log *slog.Logger) domain.Bell {
+	if cfg.BarkURL == "" {
+		return nil
+	}
+	bell, err := bark.New(cfg.BarkURL, log)
+	if err != nil {
+		log.Warn("bark off", slog.String("err", err.Error()))
+		return nil
+	}
+	return bell
 }
 
 // BuildInspector builds the light Telegram client of the doctor and
@@ -285,8 +314,10 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	inbox := state.NewInbox(env.StateDir, log)
 	replies := transcript.NewReader(transcript.Dirs{Claude: cfg.ClaudeProjectsDirs, Codex: cfg.CodexSessionsDirs}, system.Getenv, log)
 	logTranscriptRoots(replies, cfg, log)
+	bell := buildBell(cfg, log)
+	log.Info("bark", slog.Bool("on", bell != nil))
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: replies, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log)}, clock, log)
+		app.Services{Replies: replies, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log), Bell: bell}, clock, log)
 	presence := app.NewPresence(system.NewIdleSource(log), opts, clock, log)
 	d = app.NewDaemon(cfg, hg, tg, registry, reconciler, bridge, capture, state.NewConfigStore(env.ConfigDir, log), opts, presence, clock, log)
 	d.SetInbox(inbox)
