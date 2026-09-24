@@ -142,6 +142,7 @@ func TestOptionGroupsAndSpecs(t *testing.T) {
 		{OptionPostsMinSeconds, KindChoice, "0", ChoiceSourceSeconds},
 		{OptionPostsScreenLines, KindChoice, "12", ChoiceSourceScreenLines},
 		{OptionPostsIdleReply, KindBool, "false", ""},
+		{OptionPostsPictures, KindBool, "true", ""},
 	}
 	if len(posts) != len(wantPosts) {
 		t.Fatalf("posts options = %+v", posts)
@@ -688,6 +689,16 @@ func TestIdleReplyOption(t *testing.T) {
 	}
 	if on, _ := o.With(OptionPostsIdleReply, "true"); !on.IdleReply() {
 		t.Error("posts.idle_reply still off after With")
+	}
+}
+
+func TestPicturesOption(t *testing.T) {
+	o := DefaultOptions()
+	if !o.Pictures() {
+		t.Error("posts.pictures should default to on")
+	}
+	if off, _ := o.With(OptionPostsPictures, "false"); off.Pictures() {
+		t.Error("posts.pictures still on after With")
 	}
 }
 

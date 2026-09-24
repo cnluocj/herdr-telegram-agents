@@ -37,6 +37,9 @@ const (
 	bridgeBuffer = 256
 	// bridgeCallTimeout bounds one bridge job (Herdr read plus Telegram send).
 	bridgeCallTimeout = 15 * time.Second
+	// picturesTimeout bounds the bridge job that uploads a done post's
+	// pictures: up to ten files, far more bytes than a post.
+	picturesTimeout = 2 * time.Minute
 	// dropReportInterval is how often the daemon warns about bridge jobs
 	// lost to overflow; each drop itself is logged at debug.
 	dropReportInterval = 1 * time.Minute

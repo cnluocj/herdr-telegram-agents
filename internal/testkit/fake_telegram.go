@@ -25,6 +25,7 @@ import (
 //	edittext:<message>:<text>:buttons=<n>
 //	react:<thread>:<message>:<emoji>
 //	document:<thread>:<name>:<bytes>   (":reply=<id>" appended when set)
+//	pictures:<thread>:<name1>|<name2>   (a trailing "*" marks a photo)
 //	direct:<user>:<text>     (":notify" and ":buttons=<n>" appended when set)
 //	probe:<user>
 //	pin:<message>            unpin:<message>          deletemsg:<message>
@@ -59,6 +60,7 @@ type FakeTelegram struct {
 	observers []int64
 	pack      []string
 	docs      []domain.Document
+	pictures  []domain.Picture
 	files     map[string][]byte
 	// downloadDelay makes Download sleep that long (real time) so tests
 	// can see that a download does not stall the bridge loop.
@@ -197,8 +199,15 @@ func (f *FakeTelegram) Documents() []domain.Document {
 	return append([]domain.Document(nil), f.docs...)
 }
 
-// Reset forgets the recorded calls, sent messages, direct messages and
-// documents but keeps the topics.
+// Pictures returns every picture accepted by SendPictures, in order.
+func (f *FakeTelegram) Pictures() []domain.Picture {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.Picture(nil), f.pictures...)
+}
+
+// Reset forgets the recorded calls, sent messages, direct messages,
+// documents and pictures but keeps the topics.
 func (f *FakeTelegram) Reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -206,6 +215,7 @@ func (f *FakeTelegram) Reset() {
 	f.sent = nil
 	f.direct = nil
 	f.docs = nil
+	f.pictures = nil
 }
 
 // Topics returns a copy of the topics sorted by thread id.
@@ -530,6 +540,28 @@ func (f *FakeTelegram) SendDocument(_ context.Context, doc domain.Document) erro
 		}
 	}
 	f.docs = append(f.docs, doc)
+	return nil
+}
+
+func (f *FakeTelegram) SendPictures(_ context.Context, threadID int, pics []domain.Picture) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	names := make([]string, len(pics))
+	for i, p := range pics {
+		names[i] = p.Name
+		if p.Photo {
+			names[i] += "*"
+		}
+	}
+	if err := f.record("pictures", fmt.Sprintf("pictures:%d:%s", threadID, strings.Join(names, "|"))); err != nil {
+		return err
+	}
+	if threadID != 0 {
+		if _, ok := f.topics[threadID]; !ok {
+			return domain.ErrTopicGone
+		}
+	}
+	f.pictures = append(f.pictures, pics...)
 	return nil
 }
 

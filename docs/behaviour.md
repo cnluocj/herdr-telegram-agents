@@ -317,6 +317,40 @@ stale check and duplicate check. A turn typed in Herdr, or one whose
 `working` status the daemon never saw, is left alone. The log says `idle
 turn posted as done` at debug.
 
+### Pictures from the reply
+
+A done post can carry what the agent made: a picture file its last reply
+names follows the post into the topic, silently. Nothing needs to be set up
+on the agent's side; it only has to mention the path, the way it would
+anyway (`Screenshot: .playwright-mcp/home.png`, `saved to
+/tmp/full-page.png`). `Send pictures from the reply` (Posts group, default
+on) switches it.
+
+- The reply is read from the transcript (see
+  [Where transcripts are read](#where-transcripts-are-read)) whatever the
+  `Done post` mode, so `Screen` posts carry pictures too.
+- A path is taken from the prose, from inline code (where it may hold
+  spaces), from Markdown images and links, absolute, relative to the
+  agent's directory or starting with `~/`; it has to end in `.png`, `.jpg`,
+  `.jpeg`, `.gif` or `.webp`. URLs are skipped.
+- Only a file written during the turn is sent: modified at or after the
+  prompt the transcript records, or the first `working` status the daemon
+  saw when that is earlier. An old picture the reply merely mentions (a
+  file in `docs/`) stays home, and without a known turn start nothing is
+  sent. The file must also be a picture by its content, not its name.
+- PNG and JPEG go as photos in one album, each captioned with its file
+  name. A GIF, a WebP, or a picture Telegram would shrink to less than half
+  (longer side over 5120 px, a full-page screenshot) goes as a file, so it
+  stays sharp; so does a photo Telegram refuses. At most 10 pictures, files
+  up to 50 MB.
+- The upload runs as its own job after the post with a two-minute budget.
+  The log says `pictures posted` with the count, or `pictures failed` with
+  the reason; each path skipped is logged at debug with why (`written
+  before the turn`, `not a picture`, `missing`).
+
+The picture bytes cannot pass `Redact secrets`: a screenshot shows what
+was on the screen. The file names in the captions do pass it.
+
 ### Ringing the phone through Bark
 
 When Telegram's own notifications do not reach the phone, the daemon can
@@ -421,6 +455,7 @@ The options today:
 | `Skip short done posts` | Posts | Default `Off`. With `5s` … `120s`: the done post of a turn shorter than that is skipped (blocked time included; a turn whose start the daemon never saw posts). Blocked posts and reactions are unaffected. Any integer of seconds up to 3600 can be typed into `options.json`. See [Turns and reactions](#turns-and-reactions). |
 | `Done screen lines` | Posts | Default `12 lines`. How many lines from the bottom of the terminal a done post carries when it is a screen: `Screen` mode, or `Reply` and `Formatted` when the transcript is unavailable. A screen longer than one Telegram message is split into several. Blocked posts keep their 25 lines. Any integer of lines from 1 to 200 can be typed into `options.json`. |
 | `Answer Telegram prompts when seen` | Posts | Default off. On: a turn started by a message from its topic gets its done post even when Herdr ends it as idle (seen) rather than done, which it does for a turn that ends in the focused tab while the terminal has focus. See [Answered while you watch](#answered-while-you-watch). |
+| `Send pictures from the reply` | Posts | Default on. A picture file the agent's last reply names that was written during the turn follows the done post: PNG and JPEG as photos in one album, a GIF, a WebP or a full-page screenshot as a file, at most 10. Read from the transcript in every `Done post` mode. Off: no pictures, and `Screen` without the summary line reads no transcript. See [Pictures from the reply](#pictures-from-the-reply). |
 | `Accept files` | Inbox | Default on. Photos, documents, voice notes, audio and video sent to a topic are saved to the inbox and the agent is prompted with the path. Off: such messages answer `⚠️ inbox is off (/options → Inbox)`. See [Inbox](#inbox). |
 | `Largest file` | Inbox | Default 20 MB, the most Telegram lets a bot download. A larger file answers `⚠️ file too big: <size> > <max>` before any download. Any integer of megabytes from 1 to 20 can be typed into `options.json`. |
 | `Delete files after` | Inbox | Default 7 days. Inbox files older than that are deleted once a day, at daemon start and when the option changes. `Off` keeps them. Any integer of days can be typed into `options.json`. |
@@ -435,7 +470,7 @@ Values are saved in `options.json` next to `config.json` (mode 0600) as
 "posts.done": "screen", "posts.meta": true, "posts.fold": "20",
 "posts.chrome": true, "posts.reactions": false, "posts.pager": true,
 "posts.blocked_delay": "0", "posts.screen_lines": "12",
-"posts.idle_reply": false, "inbox.enabled": true, "inbox.max_mb": "20",
+"posts.idle_reply": false, "posts.pictures": true, "inbox.enabled": true, "inbox.max_mb": "20",
 "inbox.delete_after_days": "7", "icons.working": "⚡", "privacy.redact": true,
 "topics.delete_after_days": "30", "topics.notice_delay": "20", …}}`.
 Missing keys take their defaults and unknown keys survive a save. The file

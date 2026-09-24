@@ -49,6 +49,9 @@ type Services struct {
 	// Bell rings the phone outside Telegram (Bark) with every done post
 	// and every new question; nil rings nothing.
 	Bell domain.Bell
+	// Pictures reads the picture files a done reply names, which follow
+	// the post into the topic; nil sends none.
+	Pictures domain.PictureSource
 }
 
 // NewBridge wires the outbound and inbound use cases around the registry,
@@ -78,6 +81,9 @@ func NewBridge(cfg domain.Config, herdr domain.HerdrGateway, tg domain.TelegramG
 			return s
 		})
 	}
+	if svc.Pictures != nil {
+		out.SetPictures(svc.Pictures)
+	}
 	in := newInbound(herdr, tg, topics, registry.Agent, registry.Live, out, opts, svc, cfg, clock, log)
 	b := &Bridge{
 		out:         out,
@@ -93,6 +99,9 @@ func NewBridge(cfg domain.Config, herdr domain.HerdrGateway, tg domain.TelegramG
 	in.async = func(run func(context.Context) any) {
 		b.spawn(func(ctx context.Context) { b.Submit(run(ctx)) })
 	}
+	// A done post's pictures upload as a job of their own, under their
+	// own timeout.
+	out.submit = b.Submit
 	return b
 }
 
@@ -167,7 +176,7 @@ func (b *Bridge) Fatal() <-chan error { return b.fatal }
 // next event or a resync brings the state back.
 func (b *Bridge) Submit(job any) {
 	switch job.(type) {
-	case AgentEvent, domain.TopicMessage, domain.TopicAttachment, domain.ButtonPressed, domain.GeneralCommand, presenceAway, startResult, inboxResult:
+	case AgentEvent, domain.TopicMessage, domain.TopicAttachment, domain.ButtonPressed, domain.GeneralCommand, presenceAway, startResult, inboxResult, picturesJob:
 	default:
 		b.log.Warn("bridge job of unknown type dropped", slog.String("type", fmt.Sprintf("%T", job)))
 		return
@@ -261,12 +270,20 @@ func (b *Bridge) handle(ctx context.Context, job any) {
 	case startResult:
 		b.log.Debug("bridge job", slog.String("kind", "start_result"), slog.Int("message_id", j.messageID), slog.Bool("ok", j.err == nil))
 		b.run(ctx, "start_result", func(ctx context.Context) error { return b.in.StartFinished(ctx, j) })
+	case picturesJob:
+		b.log.Debug("bridge job", slog.String("kind", "pictures"), slog.String("key", j.key.String()), slog.Int("refs", len(j.refs)))
+		b.runFor(ctx, "pictures", picturesTimeout, func(ctx context.Context) error { return b.out.SendPictures(ctx, j) })
 	}
 }
 
 // run executes one job under the call timeout and applies the error policy.
 func (b *Bridge) run(ctx context.Context, kind string, fn func(context.Context) error) {
-	jctx, cancel := context.WithTimeout(ctx, b.CallTimeout)
+	b.runFor(ctx, kind, b.CallTimeout, fn)
+}
+
+// runFor is run with a timeout of the job's own.
+func (b *Bridge) runFor(ctx context.Context, kind string, timeout time.Duration, fn func(context.Context) error) {
+	jctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
 	err := fn(jctx)

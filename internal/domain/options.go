@@ -136,6 +136,9 @@ const (
 	// Telegram even when Herdr ends it as idle instead of done, which it
 	// does for a turn watched to its end in the focused tab.
 	OptionPostsIdleReply = "posts.idle_reply"
+	// OptionPostsPictures sends the pictures a done reply names, made
+	// during the turn, into the topic after the post.
+	OptionPostsPictures = "posts.pictures"
 	// ChoiceSourceSeconds is the static list of second counts offered by
 	// the panel for the two delay options (see SecondsChoices).
 	ChoiceSourceSeconds = "seconds"
@@ -357,6 +360,14 @@ func buildOptionSpecs() []OptionSpec {
 			Description: "Herdr counts a turn that ends in the focused tab while its terminal has focus as seen: the agent turns idle, not done, and no done post follows. On: a turn started by a message from its topic still gets its done post when it ends that way. Off keeps Herdr's rule.",
 			Kind:        KindBool,
 			Default:     "false",
+		},
+		{
+			Key:         OptionPostsPictures,
+			Group:       GroupPosts,
+			Title:       "Send pictures from the reply",
+			Description: "A picture file the agent's last reply names (a screenshot path, relative to the agent's directory or absolute) that was written during the turn follows the done post: PNG and JPEG as photos in one album, a GIF, a WebP or a full-page screenshot as a file. At most 10, silent. The reply comes from the Claude Code or Codex transcript, whatever the done post mode; a picture written before the turn started is never sent.",
+			Kind:        KindBool,
+			Default:     "true",
 		},
 		{
 			Key:         OptionInboxEnabled,
@@ -1009,6 +1020,10 @@ func (o Options) ScreenLines() int {
 // IdleReply reports whether a turn started from Telegram gets its done
 // post when Herdr ends it as idle.
 func (o Options) IdleReply() bool { return o.Bool(OptionPostsIdleReply) }
+
+// Pictures reports whether the pictures a done reply names follow the
+// post.
+func (o Options) Pictures() bool { return o.Bool(OptionPostsPictures) }
 
 // PostsChrome reports whether Claude Code's input frame is cut from the
 // bottom of screen posts.

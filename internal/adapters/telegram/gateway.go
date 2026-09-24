@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -684,6 +685,108 @@ func (g *Gateway) SendDocument(ctx context.Context, doc domain.Document) error {
 		slog.Int("thread_id", doc.ThreadID), slog.String("name", doc.Name), slog.Int("bytes", len(doc.Data)),
 		slog.Int("reply_to", doc.ReplyTo), slog.Int("caption_len", len(doc.Caption)))
 	return nil
+}
+
+// SendPictures uploads a done post's pictures silently: the photos first,
+// as one album (sendPhoto for a single one) captioned with their names,
+// then the other pictures as files the same way. Photos Telegram refuses
+// with a 400 (PHOTO_INVALID_DIMENSIONS, IMAGE_PROCESS_FAILED) go again
+// as files.
+func (g *Gateway) SendPictures(ctx context.Context, threadID int, pics []domain.Picture) error {
+	var photos, files []domain.Picture
+	for _, p := range pics {
+		if p.Photo {
+			photos = append(photos, p)
+		} else {
+			files = append(files, p)
+		}
+	}
+	if len(photos) > 0 {
+		err := g.sendPictures(ctx, threadID, photos, true)
+		var api *APIError
+		switch {
+		case errors.As(err, &api) && api.Code == 400:
+			g.log.Info("photos refused, sending them as files", slog.Int("thread_id", threadID), slog.Int("photos", len(photos)), slog.Any("err", err))
+			files = append(photos, files...)
+		case err != nil:
+			return err
+		}
+	}
+	if len(files) > 0 {
+		return g.sendPictures(ctx, threadID, files, false)
+	}
+	return nil
+}
+
+// sendPictures sends one batch as photos or as files: a single picture
+// with sendPhoto or sendDocument, several as one sendMediaGroup album. The
+// request is built inside the queued call, so a retry uploads fresh
+// readers instead of drained ones.
+func (g *Gateway) sendPictures(ctx context.Context, threadID int, pics []domain.Picture, photos bool) error {
+	names := attachNames(pics)
+	method := "sendMediaGroup"
+	switch {
+	case len(pics) == 1 && photos:
+		method = "sendPhoto"
+	case len(pics) == 1:
+		method = "sendDocument"
+	}
+	call := func(ctx context.Context) error {
+		var err error
+		switch method {
+		case "sendPhoto":
+			_, err = g.api.SendPhoto(ctx, &bot.SendPhotoParams{
+				ChatID:              g.chatID,
+				MessageThreadID:     threadID,
+				Photo:               &models.InputFileUpload{Filename: names[0], Data: bytes.NewReader(pics[0].Data)},
+				Caption:             pics[0].Name,
+				DisableNotification: true,
+			})
+		case "sendDocument":
+			_, err = g.api.SendDocument(ctx, &bot.SendDocumentParams{
+				ChatID:                      g.chatID,
+				MessageThreadID:             threadID,
+				Document:                    &models.InputFileUpload{Filename: names[0], Data: bytes.NewReader(pics[0].Data)},
+				DisableNotification:         true,
+				DisableContentTypeDetection: true,
+			})
+		default:
+			media := make([]models.InputMedia, len(pics))
+			for i, p := range pics {
+				if photos {
+					media[i] = &models.InputMediaPhoto{Media: "attach://" + names[i], Caption: p.Name, MediaAttachment: bytes.NewReader(p.Data)}
+				} else {
+					media[i] = &models.InputMediaDocument{Media: "attach://" + names[i], MediaAttachment: bytes.NewReader(p.Data), DisableContentTypeDetection: true}
+				}
+			}
+			_, err = g.api.SendMediaGroup(ctx, &bot.SendMediaGroupParams{ChatID: g.chatID, MessageThreadID: threadID, Media: media, DisableNotification: true})
+		}
+		return translate(err)
+	}
+	size := 0
+	for _, p := range pics {
+		size += len(p.Data)
+	}
+	err := g.queue.Do(ctx, call)
+	return g.finish(method, err, slog.Int("thread_id", threadID), slog.Int("pictures", len(pics)), slog.Bool("photos", photos), slog.Int("bytes", size))
+}
+
+// attachNames gives each picture a distinct upload name: its name reduced
+// to safe characters, with -2, -3 … before the extension when taken.
+func attachNames(pics []domain.Picture) []string {
+	names := make([]string, len(pics))
+	taken := map[string]bool{}
+	for i, p := range pics {
+		name := domain.SafeFileName(p.Name, "picture")
+		ext := path.Ext(name)
+		stem := strings.TrimSuffix(name, ext)
+		for n := 2; taken[name]; n++ {
+			name = fmt.Sprintf("%s-%d%s", stem, n, ext)
+		}
+		taken[name] = true
+		names[i] = name
+	}
+	return names
 }
 
 func (g *Gateway) React(ctx context.Context, threadID, messageID int, emoji string) error {

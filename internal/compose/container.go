@@ -11,6 +11,7 @@ import (
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/bark"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/herdr"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/logging"
+	"github.com/permgps/herdr-telegram-agents/internal/adapters/pictures"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/state"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/system"
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/telegram"
@@ -317,7 +318,8 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	bell := buildBell(cfg, log)
 	log.Info("bark", slog.Bool("on", bell != nil))
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: replies, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log), Bell: bell}, clock, log)
+		app.Services{Replies: replies, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log), Bell: bell,
+			Pictures: pictures.New(log)}, clock, log)
 	presence := app.NewPresence(system.NewIdleSource(log), opts, clock, log)
 	d = app.NewDaemon(cfg, hg, tg, registry, reconciler, bridge, capture, state.NewConfigStore(env.ConfigDir, log), opts, presence, clock, log)
 	d.SetInbox(inbox)

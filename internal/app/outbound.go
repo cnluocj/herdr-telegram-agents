@@ -78,6 +78,13 @@ type outbound struct {
 	bell   domain.Bell
 	redact func(string) string
 	icons  func() domain.StatusIcons
+	// pictures reads the picture files a done reply names, which follow
+	// the post (nil sends none); picturesOn reads posts.pictures. submit
+	// hands their upload to the bridge as a job of its own; nil uploads
+	// them inline.
+	pictures   domain.PictureSource
+	picturesOn func() bool
+	submit     func(any)
 
 	deb        *debouncer
 	threads    map[domain.Key]int
@@ -198,6 +205,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 	fold := func() int { return defaultFoldLines }
 	screenLines := func() int { return doneLines }
 	idleReply := func() bool { return false }
+	picturesOn := func() bool { return true }
 	icons := domain.DefaultStatusIcons
 	if opts != nil {
 		paused = func() bool { return !opts.SyncEnabled() }
@@ -211,6 +219,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		fold = opts.FoldAfter
 		screenLines = opts.ScreenLines
 		idleReply = opts.IdleReply
+		picturesOn = opts.Pictures
 		icons = opts.StatusIcons
 	}
 	if live == nil {
@@ -238,6 +247,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		fold:         fold,
 		screenLines:  screenLines,
 		idleReply:    idleReply,
+		picturesOn:   picturesOn,
 		redact:       func(s string) string { return s },
 		icons:        icons,
 		log:          log,
@@ -645,14 +655,17 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 	if mode != domain.DoneScreen && o.replies == nil {
 		mode = domain.DoneScreen
 	}
-	// The transcript is read for the reply text (Reply, Formatted) and,
-	// with posts.meta on, for the summary line under every done post. A
-	// transcript last written before the turn started belongs to an
-	// earlier turn (two Claude panes in one directory) and counts as
-	// unavailable. A failure costs the screen mode nothing but the line.
+	// The transcript is read for the reply text (Reply, Formatted), with
+	// posts.meta on for the summary line under every done post, and with
+	// posts.pictures on for the pictures the reply names. A transcript
+	// last written before the turn started belongs to an earlier turn (two
+	// Claude panes in one directory) and counts as unavailable. A failure
+	// costs the screen mode nothing but the line and the pictures.
 	wantMeta := agent.Status == domain.StatusDone && o.meta() && o.replies != nil
+	wantPictures := agent.Status == domain.StatusDone && o.pictures != nil && o.replies != nil && o.picturesOn()
 	var footer string
-	if !captured && (mode != domain.DoneScreen || wantMeta) {
+	var pictured domain.Reply
+	if !captured && (mode != domain.DoneScreen || wantMeta || wantPictures) {
 		r, err := o.replies.LastReply(ctx, agent)
 		if err == nil && hasTurn && !t.started.IsZero() && !r.Written.IsZero() && r.Written.Before(t.started) {
 			err = fmt.Errorf("%w: stale transcript: written %s before the turn started", domain.ErrNoReply, t.started.Sub(r.Written).Round(time.Second))
@@ -666,6 +679,9 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 		default:
 			if mode != domain.DoneScreen {
 				reply, text = r, strings.TrimSpace(r.Text)
+			}
+			if wantPictures {
+				pictured = r
 			}
 			if wantMeta {
 				footer = r.Meta.Line()
@@ -734,6 +750,9 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 		o.announced[key] = true
 	}
 	o.ringPhone(ctx, agent, entry.ThreadID, id, text, mode != domain.DoneScreen, footer, notify, force)
+	if err := o.followWithPictures(ctx, key, agent, entry.ThreadID, pictured, t, hasTurn); err != nil {
+		return err
+	}
 	if mode != domain.DoneScreen {
 		o.log.Info("reply posted", slog.String("key", key.String()), slog.Int("thread_id", entry.ThreadID),
 			slog.String("mode", string(mode)), slog.Int("lines", strings.Count(text, "\n")+1), slog.Int("bytes", len(text)),

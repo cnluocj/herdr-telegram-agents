@@ -69,6 +69,22 @@ func (g *redactingGateway) SendDocument(ctx context.Context, doc domain.Document
 	return g.TelegramGateway.SendDocument(ctx, doc)
 }
 
+// SendPictures redacts the names, which caption the photos; the image
+// bytes cannot be redacted and pass as they are.
+func (g *redactingGateway) SendPictures(ctx context.Context, threadID int, pics []domain.Picture) error {
+	if !g.enabled() {
+		return g.TelegramGateway.SendPictures(ctx, threadID, pics)
+	}
+	stats := domain.RedactionStats{}
+	named := make([]domain.Picture, len(pics))
+	for i, p := range pics {
+		p.Name = g.redact(p.Name, stats)
+		named[i] = p
+	}
+	g.report(threadID, "pictures", stats)
+	return g.TelegramGateway.SendPictures(ctx, threadID, named)
+}
+
 func (g *redactingGateway) EditText(ctx context.Context, messageID int, text string, html bool, buttons []domain.Button) error {
 	if !g.enabled() {
 		return g.TelegramGateway.EditText(ctx, messageID, text, html, buttons)

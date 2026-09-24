@@ -138,6 +138,15 @@ type ReplySource interface {
 	LastReply(ctx context.Context, agent Agent) (Reply, error)
 }
 
+// PictureSource reads the image files an agent's reply names.
+type PictureSource interface {
+	// Pictures resolves refs (from PictureRefs: relative ones against dir,
+	// "~/" against the home folder) and returns the pictures among them in
+	// order, at most MaxPictures: regular files in a picture format, last
+	// modified at or after since. Every other ref is skipped.
+	Pictures(ctx context.Context, dir string, refs []string, since time.Time) []Picture
+}
+
 // Button is one inline button under a bot message. Text is what the
 // operator sees; Data comes back verbatim in ButtonPressed and must stay
 // within Telegram's 64-byte limit. Buttons with the same non-zero Row share
@@ -261,6 +270,10 @@ type TelegramGateway interface {
 	// SendDocument uploads one file into a topic, or into General when
 	// ThreadID is 0, as a single silent message.
 	SendDocument(ctx context.Context, doc Document) error
+	// SendPictures uploads pictures into a topic silently: the photos as
+	// one album, each captioned with its name, then the other pictures as
+	// files. A photo Telegram refuses goes again as a file.
+	SendPictures(ctx context.Context, threadID int, pics []Picture) error
 	// React puts one emoji reaction on the operator's message; threadID is
 	// informational, Telegram addresses reactions by message id.
 	React(ctx context.Context, threadID, messageID int, emoji string) error

@@ -115,6 +115,9 @@ func (o *Options) ScreenLines() int { return o.Get().ScreenLines() }
 // IdleReply mirrors domain.Options.IdleReply.
 func (o *Options) IdleReply() bool { return o.Get().IdleReply() }
 
+// Pictures mirrors domain.Options.Pictures.
+func (o *Options) Pictures() bool { return o.Get().Pictures() }
+
 // InboxEnabled mirrors domain.Options.InboxEnabled.
 func (o *Options) InboxEnabled() bool { return o.Get().InboxEnabled() }
 
