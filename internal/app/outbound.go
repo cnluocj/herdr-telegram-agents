@@ -81,10 +81,12 @@ type outbound struct {
 	// pictures reads the picture files a done reply names, which follow
 	// the post (nil sends none); picturesOn reads posts.pictures. submit
 	// hands their upload to the bridge as a job of its own; nil uploads
-	// them inline.
-	pictures   domain.PictureSource
-	picturesOn func() bool
-	submit     func(any)
+	// them inline. sentPictures holds, per topic, the pictures already
+	// sent (pictureID to modification time), so each goes once.
+	pictures     domain.PictureSource
+	picturesOn   func() bool
+	submit       func(any)
+	sentPictures map[int]map[string]time.Time
 
 	deb        *debouncer
 	threads    map[domain.Key]int
@@ -264,6 +266,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		captures:     map[domain.Key]pendingCapture{},
 		refresh:      map[domain.Key]int{},
 		typing:       map[domain.Key]typingWait{},
+		sentPictures: map[int]map[string]time.Time{},
 	}
 }
 
@@ -750,7 +753,7 @@ func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent,
 		o.announced[key] = true
 	}
 	o.ringPhone(ctx, agent, entry.ThreadID, id, text, mode != domain.DoneScreen, footer, notify, force)
-	if err := o.followWithPictures(ctx, key, agent, entry.ThreadID, pictured, t, hasTurn); err != nil {
+	if err := o.followWithPictures(ctx, key, agent, entry.ThreadID, pictured); err != nil {
 		return err
 	}
 	if mode != domain.DoneScreen {

@@ -21,8 +21,8 @@ func picturesFixture(t *testing.T, mode domain.DoneMode) (*bridgeFixture, *testk
 		t.Fatal(err)
 	}
 	src := testkit.NewFakePictures()
-	src.Set("shots/home.png", domain.Picture{Path: "/work/shop/shots/home.png", Name: "home.png", Data: []byte("png"), Photo: true})
-	src.Set("/tmp/full.png", domain.Picture{Path: "/tmp/full.png", Name: "full.png", Data: []byte("tall png")})
+	src.Set("shots/home.png", domain.Picture{Path: "/work/shop/shots/home.png", Name: "home.png", Data: []byte("png"), Photo: true, Modified: tb0})
+	src.Set("/tmp/full.png", domain.Picture{Path: "/tmp/full.png", Name: "full.png", Data: []byte("tall png"), Modified: tb0})
 	f.out.SetPictures(src)
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
 	a.Cwd = "/work/shop"
@@ -47,16 +47,13 @@ func workedTurn(t *testing.T, f *bridgeFixture, a domain.Agent) time.Time {
 func TestOutboundSendsPicturesAfterDonePost(t *testing.T) {
 	f, src, a := picturesFixture(t, domain.DoneFormatted)
 	f.replies.Set(a.Key, picturesReply)
-	prompt := tb0.Add(-30 * time.Second)
-	f.replies.SetMeta(a.Key, domain.TurnMeta{Started: prompt}, tb0.Add(4*time.Second))
 	workedTurn(t, f, a)
 	calls := f.tg.Calls()
 	if len(calls) != 2 || !strings.HasPrefix(calls[0], "send:101:Done.") || calls[1] != "pictures:101:home.png*|full.png" {
 		t.Fatalf("calls = %q", calls)
 	}
-	// The prompt the transcript records starts the turn when it is earlier
-	// than the working status the daemon saw.
-	want := []testkit.PicturesCall{{Dir: "/work/shop", Refs: []string{"shots/home.png", "/tmp/full.png", "docs/old.png"}, Since: prompt}}
+	// Any picture written in the last day goes, whoever wrote it.
+	want := []testkit.PicturesCall{{Dir: "/work/shop", Refs: []string{"shots/home.png", "/tmp/full.png", "docs/old.png"}, Since: f.clock.Now().Add(-pictureMaxAge)}}
 	if got := src.Calls(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("source calls = %+v, want %+v", got, want)
 	}
@@ -65,36 +62,79 @@ func TestOutboundSendsPicturesAfterDonePost(t *testing.T) {
 	}
 }
 
-func TestOutboundPicturesTurnStart(t *testing.T) {
-	// Without a prompt in the transcript the daemon's working status
-	// starts the turn.
+func TestOutboundPicturesWithoutATurn(t *testing.T) {
+	// A done post whose turn the daemon never saw start (it restarted
+	// meanwhile) still carries the pictures: the window does not depend
+	// on the turn.
 	f, src, a := picturesFixture(t, domain.DoneFormatted)
 	f.replies.Set(a.Key, picturesReply)
-	started := workedTurn(t, f, a)
-	if calls := src.Calls(); len(calls) != 1 || !calls[0].Since.Equal(started) {
-		t.Fatalf("source calls = %+v, want since %s", calls, started)
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	if calls := src.Calls(); len(calls) != 1 || !calls[0].Since.Equal(f.clock.Now().Add(-pictureMaxAge)) {
+		t.Fatalf("source calls = %+v", calls)
 	}
-	// A working status seen before the recorded prompt starts the turn.
-	f2, src2, a2 := picturesFixture(t, domain.DoneFormatted)
-	f2.replies.Set(a2.Key, picturesReply)
-	f2.replies.SetMeta(a2.Key, domain.TurnMeta{Started: tb0.Add(2 * time.Second)}, tb0.Add(4*time.Second))
-	started2 := workedTurn(t, f2, a2)
-	if calls := src2.Calls(); len(calls) != 1 || !calls[0].Since.Equal(started2) {
-		t.Fatalf("source calls = %+v, want since %s", calls, started2)
+	if n := len(f.tg.Pictures()); n != 2 {
+		t.Fatalf("pictures = %d", n)
 	}
-	// With neither, any picture could be old: nothing is read or sent.
-	f3, src3, a3 := picturesFixture(t, domain.DoneFormatted)
-	f3.replies.Set(a3.Key, picturesReply)
-	f3.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f3.setStatus(a3, domain.StatusDone)})
-	f3.fire(t, 1)
-	if calls := src3.Calls(); len(calls) != 0 {
-		t.Fatalf("source calls without a turn start = %+v", calls)
+}
+
+func TestOutboundPicturesOncePerTopic(t *testing.T) {
+	f, src, a := picturesFixture(t, domain.DoneFormatted)
+	src.Set("new.png", domain.Picture{Path: "/work/shop/new.png", Name: "new.png", Data: []byte("new"), Photo: true, Modified: tb0})
+	f.replies.Set(a.Key, picturesReply)
+	workedTurn(t, f, a)
+	// The next turn names the same two and a new one: only the new one goes.
+	f.replies.Set(a.Key, "Again `shots/home.png`, /tmp/full.png and new.png")
+	f.tg.Reset()
+	workedTurn(t, f, a)
+	if got := f.tg.Calls(); len(got) != 2 || got[1] != "pictures:101:new.png*" {
+		t.Fatalf("second turn calls = %q", got)
 	}
-	if n := len(f3.tg.Sent()); n != 1 {
-		t.Fatalf("the post must still go out: %d sends", n)
+	if !strings.Contains(f.logBuf.String(), `"already_sent":2`) {
+		t.Errorf("log = %s", f.logBuf.String())
 	}
-	if !strings.Contains(f3.logBuf.String(), `"reason":"turn start unknown"`) {
-		t.Errorf("log = %s", f3.logBuf.String())
+	// Nothing new at all: no upload.
+	f.replies.Set(a.Key, "Still `shots/home.png`")
+	f.tg.Reset()
+	workedTurn(t, f, a)
+	if got := f.tg.Calls(); len(got) != 1 {
+		t.Fatalf("third turn calls = %q", got)
+	}
+	// A picture written again is a new picture.
+	src.Set("shots/home.png", domain.Picture{Path: "/work/shop/shots/home.png", Name: "home.png", Data: []byte("png v2"), Photo: true, Modified: tb0.Add(time.Hour)})
+	f.replies.Set(a.Key, "Redrawn `shots/home.png`")
+	f.tg.Reset()
+	workedTurn(t, f, a)
+	if got := f.tg.Calls(); len(got) != 2 || got[1] != "pictures:101:home.png*" {
+		t.Fatalf("rewritten picture calls = %q", got)
+	}
+	// Another topic gets it too.
+	b := f.add(t, "p2", "t2", "reviewer-2", domain.StatusIdle)
+	b.Cwd = "/work/shop"
+	f.agents[b.Key] = b
+	f.replies.Set(b.Key, "See `shots/home.png`")
+	workedTurn(t, f, b)
+	if got := f.tg.Calls(); len(got) != 2 || got[1] != "pictures:102:home.png*" {
+		t.Fatalf("other topic calls = %q", got)
+	}
+}
+
+func TestOutboundSentPicturesForgetOldEntries(t *testing.T) {
+	f, src, a := picturesFixture(t, domain.DoneFormatted)
+	src.Set("old.png", domain.Picture{Path: "/work/shop/old.png", Name: "old.png", Data: []byte("old"), Modified: tb0.Add(-48 * time.Hour)})
+	src.Set("new.png", domain.Picture{Path: "/work/shop/new.png", Name: "new.png", Data: []byte("new"), Modified: tb0})
+	f.replies.Set(a.Key, "old.png and `shots/home.png`")
+	workedTurn(t, f, a)
+	f.replies.Set(a.Key, "new.png")
+	workedTurn(t, f, a)
+	sent := f.out.sentPictures[101]
+	if len(sent) != 2 {
+		t.Fatalf("sent = %v, want home.png and new.png only", sent)
+	}
+	for id := range sent {
+		if strings.Contains(id, "old.png") {
+			t.Fatalf("an entry older than the window is kept: %q", id)
+		}
 	}
 }
 
@@ -178,6 +218,13 @@ func TestOutboundPicturesFailures(t *testing.T) {
 	workedTurn(t, f, a) // fire fails the test on an error
 	if !strings.Contains(f.logBuf.String(), `"msg":"pictures failed"`) {
 		t.Errorf("log = %s", f.logBuf.String())
+	}
+	// A failed upload marks nothing as sent: the next reply naming the
+	// pictures sends them.
+	f.replies.Set(a.Key, "Once more: `shots/home.png` and /tmp/full.png")
+	workedTurn(t, f, a)
+	if n := len(f.tg.Pictures()); n != 2 {
+		t.Fatalf("pictures after a failed upload = %d", n)
 	}
 	// A fatal Telegram error still reaches the daemon.
 	f2, _, a2 := picturesFixture(t, domain.DoneFormatted)

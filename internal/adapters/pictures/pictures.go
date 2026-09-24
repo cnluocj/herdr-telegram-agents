@@ -111,7 +111,7 @@ func read(path string, since time.Time) (domain.Picture, string) {
 	case !info.Mode().IsRegular():
 		return domain.Picture{}, "not a file"
 	case info.ModTime().Before(since):
-		return domain.Picture{}, "written before the turn"
+		return domain.Picture{}, "too old"
 	case info.Size() == 0:
 		return domain.Picture{}, "empty"
 	case info.Size() > maxFileBytes:
@@ -129,7 +129,7 @@ func read(path string, since time.Time) (domain.Picture, string) {
 		return domain.Picture{}, "not a picture"
 	}
 	photo := (format == "png" || format == "jpeg") && len(data) <= maxPhotoBytes && photoShape(cfg.Width, cfg.Height)
-	return domain.Picture{Path: path, Name: filepath.Base(path), Data: data, Photo: photo}, ""
+	return domain.Picture{Path: path, Name: filepath.Base(path), Data: data, Modified: info.ModTime(), Photo: photo}, ""
 }
 
 // isWebP reports a RIFF container of WebP data, which the standard

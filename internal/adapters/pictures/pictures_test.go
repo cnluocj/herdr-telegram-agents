@@ -85,7 +85,7 @@ func TestPictures(t *testing.T) {
 	}
 	for i, w := range want {
 		g := got[i]
-		if g.Path != w.path || g.Photo != w.photo || g.Name != filepath.Base(w.path) || len(g.Data) == 0 {
+		if g.Path != w.path || g.Photo != w.photo || g.Name != filepath.Base(w.path) || len(g.Data) == 0 || !g.Modified.Equal(fresh) {
 			t.Errorf("picture %d = %s photo=%v name=%s, want %s photo=%v", i, g.Path, g.Photo, g.Name, w.path, w.photo)
 		}
 	}

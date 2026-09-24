@@ -40,6 +40,10 @@ const (
 	// picturesTimeout bounds the bridge job that uploads a done post's
 	// pictures: up to ten files, far more bytes than a post.
 	picturesTimeout = 2 * time.Minute
+	// pictureMaxAge is how old a picture a done reply names may be and
+	// still follow the post: older files are what the reply mentions, not
+	// what it shows.
+	pictureMaxAge = 24 * time.Hour
 	// dropReportInterval is how often the daemon warns about bridge jobs
 	// lost to overflow; each drop itself is logged at debug.
 	dropReportInterval = 1 * time.Minute

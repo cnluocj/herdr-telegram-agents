@@ -2,6 +2,7 @@ package domain
 
 import (
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -14,15 +15,16 @@ const MaxPictures = 10
 const maxPictureRefs = 100
 
 // Picture is one image file an agent's reply names, read for its topic.
-// Path is where it was read (for logs), Name its base name. Photo marks a
-// PNG or JPEG Telegram may show as a photo; any other picture (a GIF, a
-// WebP, a full-page screenshot Telegram would shrink past reading) is
-// uploaded as a file, untouched.
+// Path is where it was read, Name its base name, Modified when it was last
+// written. Photo marks a PNG or JPEG Telegram may show as a photo; any
+// other picture (a GIF, a WebP, a full-page screenshot Telegram would
+// shrink past reading) is uploaded as a file, untouched.
 type Picture struct {
-	Path  string
-	Name  string
-	Data  []byte
-	Photo bool
+	Path     string
+	Name     string
+	Data     []byte
+	Modified time.Time
+	Photo    bool
 }
 
 // pictureExts are the file endings PictureRefs looks for, lower case.
@@ -35,7 +37,7 @@ var pictureExts = []string{".png", ".jpg", ".jpeg", ".gif", ".webp"}
 // punctuation; the content of an inline code span is also tried whole, so
 // a path with spaces can be named in backticks. URLs are skipped. The
 // result only proposes paths; whether a file is there, is a picture and
-// belongs to the turn is the PictureSource's to decide.
+// is recent enough is the PictureSource's to decide.
 func PictureRefs(text string) []string {
 	var refs []string
 	seen := map[string]bool{}
