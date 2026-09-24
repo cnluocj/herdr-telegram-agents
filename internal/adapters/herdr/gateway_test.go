@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,6 +236,69 @@ func TestGatewayPromptAndSendKeys(t *testing.T) {
 	if got := lastParams(t, s, "agent.send_keys"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("send_keys params = %v, want %v", got, want)
 	}
+}
+
+func TestGatewayTypeText(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.send_input", ackHandler)
+	s.Handle("agent.prompt", ackHandler)
+	g := newGateway(t, s)
+
+	// One pane-level write of the text and enter, never agent.prompt: a
+	// dialog's free text is typed while the agent is blocked.
+	if err := g.TypeText(ctxT(t), "w1:p1", "my own answer"); err != nil {
+		t.Fatalf("TypeText: %v", err)
+	}
+	want := map[string]any{"pane_id": "w1:p1", "text": "my own answer", "keys": []any{"enter"}}
+	if got := lastParams(t, s, "pane.send_input"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("send_input params = %v, want %v", got, want)
+	}
+	if n := countRequests(s, "agent.prompt"); n != 0 {
+		t.Fatalf("agent.prompt called %d times", n)
+	}
+}
+
+func TestGatewayTypeTextFallsBackOnOldHerdr(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.send_input", func(string, json.RawMessage) (any, *testkit.APIError) {
+		return nil, &testkit.APIError{Code: "invalid_request", Message: "invalid request: unknown variant `pane.send_input`, expected one of `ping`"}
+	})
+	s.Handle("agent.prompt", ackHandler)
+	g := newGateway(t, s)
+	if err := g.TypeText(ctxT(t), "w1:p1", "my own answer"); err != nil {
+		t.Fatalf("TypeText: %v", err)
+	}
+	want := map[string]any{"target": "w1:p1", "text": "my own answer"}
+	if got := lastParams(t, s, "agent.prompt"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallback prompt params = %v, want %v", got, want)
+	}
+}
+
+func TestGatewayTypeTextOtherErrorsStay(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.send_input", func(string, json.RawMessage) (any, *testkit.APIError) {
+		return nil, &testkit.APIError{Code: "pane_send_failed", Message: "pty closed"}
+	})
+	s.Handle("agent.prompt", ackHandler)
+	g := newGateway(t, s)
+	err := g.TypeText(ctxT(t), "w1:p1", "x")
+	if err == nil || !strings.Contains(err.Error(), "pane_send_failed") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := countRequests(s, "agent.prompt"); n != 0 {
+		t.Fatalf("a real failure fell back to agent.prompt %d times", n)
+	}
+}
+
+// countRequests counts the requests the server got for method.
+func countRequests(s *testkit.NDJSONServer, method string) int {
+	n := 0
+	for _, r := range s.Requests() {
+		if r.Method == method {
+			n++
+		}
+	}
+	return n
 }
 
 func TestGatewayFocus(t *testing.T) {

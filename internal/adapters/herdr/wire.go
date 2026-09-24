@@ -166,6 +166,14 @@ type sendKeysParams struct {
 	Keys   []string `json:"keys"`
 }
 
+// paneSendInputParams is pane.send_input: text (bracketed when the pane
+// asked for bracketed paste) and keys, written as one ordered input.
+type paneSendInputParams struct {
+	PaneID string   `json:"pane_id"`
+	Text   string   `json:"text,omitempty"`
+	Keys   []string `json:"keys,omitempty"`
+}
+
 type focusParams struct {
 	Target string `json:"target"`
 }

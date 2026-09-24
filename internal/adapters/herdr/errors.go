@@ -10,6 +10,10 @@ const codeNotFound = "not_found"
 // an agent is working.
 const codeNotIdle = "agent_not_idle"
 
+// codeInvalidRequest is what a Herdr without a method answers when asked
+// for it; the message then names the "unknown variant".
+const codeInvalidRequest = "invalid_request"
+
 // APIError is an error line returned by the Herdr server for a request.
 // Codes are Herdr's snake_case identifiers such as "not_found".
 type APIError struct {

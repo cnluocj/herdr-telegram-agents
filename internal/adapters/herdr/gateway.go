@@ -200,6 +200,20 @@ func (g *Gateway) SendKeys(ctx context.Context, target string, keys []string) er
 	return g.call(ctx, "agent.send_keys", target, sendKeysParams{Target: target, Keys: keys}, nil)
 }
 
+// TypeText types text into the pane and presses enter as one write
+// (pane.send_input), past Herdr's agent-state check that makes
+// agent.prompt refuse a blocked agent: the free text of a dialog. A Herdr
+// without pane.send_input gets agent.prompt instead.
+func (g *Gateway) TypeText(ctx context.Context, paneID, text string) error {
+	err := g.call(ctx, "pane.send_input", paneID, paneSendInputParams{PaneID: paneID, Text: text, Keys: []string{domain.KeyEnter}}, nil)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Code == codeInvalidRequest && strings.Contains(apiErr.Message, "unknown variant") {
+		g.log.Debug("pane.send_input unsupported, typing through agent.prompt", slog.String("pane", paneID))
+		return g.Prompt(ctx, paneID, text)
+	}
+	return err
+}
+
 // Focus brings the agent's pane to the front in Herdr.
 func (g *Gateway) Focus(ctx context.Context, target string) error {
 	return g.call(ctx, "agent.focus", target, focusParams{Target: target}, nil)

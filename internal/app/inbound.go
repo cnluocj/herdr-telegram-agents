@@ -200,13 +200,15 @@ func (i *inbound) Due() <-chan domain.Key { return i.deb.Due() }
 func (i *inbound) Pending() int { return len(i.pending) }
 
 // typed delivers the operator's message as the free text of a dialog
-// after a ✏️ press: typed as a prompt whatever it looks like.
+// after a ✏️ press: typed into the pane with enter whatever it looks like.
+// Not a prompt: the dialog keeps the agent blocked, and Herdr refuses a
+// prompt to a blocked agent without sending a byte (seen 2026-09-23).
 func (i *inbound) typed(ctx context.Context, msg domain.TopicMessage, key domain.Key, w typingWait) error {
+	if err := i.herdr.TypeText(ctx, key.PaneID, msg.Text); err != nil {
+		return i.failed(ctx, msg, key, "type_text", err)
+	}
 	i.log.Info("typed text delivered", slog.String("key", key.String()), slog.Int("thread_id", msg.ThreadID),
 		slog.Int("message_id", msg.MessageID), slog.Int("dialog_message_id", w.messageID), slog.Int("len", len(msg.Text)))
-	if err := i.herdr.Prompt(ctx, key.PaneID, msg.Text); err != nil {
-		return i.failed(ctx, msg, key, "prompt", err)
-	}
 	if err := i.out.TypingDone(ctx, key, w, msg.Text); err != nil {
 		return err
 	}

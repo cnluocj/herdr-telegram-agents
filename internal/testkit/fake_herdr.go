@@ -65,6 +65,7 @@ type FakeHerdr struct {
 	watches    [][]string
 	notifies   []Notification
 	prompts    []string
+	typed      []string
 	screens    map[string]string
 	revisions  map[string]int64
 	reads      []ReadCall
@@ -287,6 +288,13 @@ func (f *FakeHerdr) Notifications() []Notification {
 	return append([]Notification(nil), f.notifies...)
 }
 
+// Typed returns every TypeText call as "<pane>: <text>".
+func (f *FakeHerdr) Typed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.typed...)
+}
+
 // Prompts returns every Prompt call as "<target>: <text>".
 func (f *FakeHerdr) Prompts() []string {
 	f.mu.Lock()
@@ -325,6 +333,14 @@ func (f *FakeHerdr) Prompt(_ context.Context, target, text string) error {
 	f.prompts = append(f.prompts, target+": "+text)
 	f.log.Debug("fake herdr prompt", slog.String("target", target), slog.Int("len", len(text)))
 	return f.fail("prompt")
+}
+
+func (f *FakeHerdr) TypeText(_ context.Context, paneID, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.typed = append(f.typed, paneID+": "+text)
+	f.log.Debug("fake herdr type_text", slog.String("pane", paneID), slog.Int("len", len(text)))
+	return f.fail("type")
 }
 
 func (f *FakeHerdr) SendKeys(_ context.Context, target string, keys []string) error {

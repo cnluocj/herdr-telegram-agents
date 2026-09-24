@@ -1038,12 +1038,19 @@ func TestInboundTypedTextAfterTextEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tg.Reset()
-	// A short reply that would be a key press goes through as text.
+	// A short reply that would be a key press goes through as text, typed
+	// into the pane: a prompt would be refused while the dialog blocks.
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 7, "y")); err != nil {
 		t.Fatal(err)
 	}
-	if prompts := f.herdr.Prompts(); len(prompts) != 1 || prompts[0] != "p1: y" {
-		t.Fatalf("Prompts = %q", prompts)
+	if typed := f.herdr.Typed(); len(typed) != 1 || typed[0] != "p1: y" {
+		t.Fatalf("Typed = %q", typed)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("free text sent as a prompt: %q", prompts)
+	}
+	if !strings.Contains(f.logBuf.String(), `"msg":"typed text delivered"`) {
+		t.Error("log lacks the delivery")
 	}
 	if keys := f.herdr.Keys(); len(keys) != 1 || keys[0].Keys[0] != "4" {
 		t.Fatalf("Keys = %+v", keys)
@@ -1056,6 +1063,26 @@ func TestInboundTypedTextAfterTextEntry(t *testing.T) {
 	}
 	if keys := f.herdr.Keys(); len(keys) != 2 || keys[1].Keys[0] != "y" {
 		t.Fatalf("Keys after the wait = %+v", keys)
+	}
+}
+
+func TestInboundTypedTextFailure(t *testing.T) {
+	f := newBridgeFixture(t)
+	blockedWithDialog(t, f, dialogScreen)
+	if err := f.out.Press(f.ctx, press(101, 1000, "t:4")); err != nil {
+		t.Fatal(err)
+	}
+	f.tg.Reset()
+	f.herdr.FailNext("type", errors.New("herdr pane.send_input: pty closed"))
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 7, "my answer")); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(f.logBuf.String(), `"msg":"typed text delivered"`) {
+		t.Fatal("a failed delivery was logged as delivered")
+	}
+	calls := f.tg.Calls()
+	if len(calls) == 0 || !strings.Contains(strings.Join(calls, "\n"), ":reply=7") {
+		t.Fatalf("no failure reply to the message: %q", calls)
 	}
 }
 
@@ -1073,7 +1100,7 @@ func TestInboundSlashCancelsTypingWait(t *testing.T) {
 	if keys := f.herdr.Keys(); len(keys) != 2 || keys[1].Keys[0] != "esc" {
 		t.Fatalf("Keys = %+v", keys)
 	}
-	if n := len(f.herdr.Prompts()); n != 0 {
+	if n := len(f.herdr.Prompts()) + len(f.herdr.Typed()); n != 0 {
 		t.Fatalf("command typed as text: %d", n)
 	}
 }
@@ -1091,6 +1118,9 @@ func TestInboundTypingWaitIsPerTopic(t *testing.T) {
 	}
 	if prompts := f.herdr.Prompts(); len(prompts) != 1 || prompts[0] != "p2: hello" {
 		t.Fatalf("Prompts = %q", prompts)
+	}
+	if typed := f.herdr.Typed(); len(typed) != 0 {
+		t.Fatalf("the other topic's message was typed into the dialog: %q", typed)
 	}
 	key := domain.Key{PaneID: "p1", TerminalID: "t1"}
 	if _, ok := f.out.TakeTyping(f.ctx, key); !ok {

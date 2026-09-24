@@ -43,6 +43,10 @@ type HerdrGateway interface {
 	Prompt(ctx context.Context, target, text string) error
 	// SendKeys sends raw key names such as "enter" or "escape".
 	SendKeys(ctx context.Context, target string, keys []string) error
+	// TypeText types text into the pane and presses enter in one write,
+	// whatever the agent's state: the free text of a dialog, which Prompt
+	// cannot deliver because Herdr refuses a prompt to a blocked agent.
+	TypeText(ctx context.Context, paneID, text string) error
 	// Rename sets the agent name; nil clears it back to the default.
 	Rename(ctx context.Context, target string, name *string) error
 	// RenameTab sets the label of the tab holding the agent; a tab always
