@@ -660,11 +660,12 @@ func downloadErr(err error) string {
 // SendDocument uploads one file as a single silent message. ThreadID 0
 // addresses the General topic. Content type detection is disabled so a
 // .txt stays a plain file instead of being previewed as something else.
+// Each attempt uploads a fresh reader, so a retry after a 5xx sends the
+// file again instead of the drained reader of the first try.
 func (g *Gateway) SendDocument(ctx context.Context, doc domain.Document) error {
 	params := &bot.SendDocumentParams{
 		ChatID:                      g.chatID,
 		MessageThreadID:             doc.ThreadID,
-		Document:                    &models.InputFileUpload{Filename: doc.Name, Data: bytes.NewReader(doc.Data)},
 		Caption:                     doc.Caption,
 		DisableNotification:         true,
 		DisableContentTypeDetection: true,
@@ -673,6 +674,7 @@ func (g *Gateway) SendDocument(ctx context.Context, doc domain.Document) error {
 		params.ReplyParameters = &models.ReplyParameters{MessageID: doc.ReplyTo, AllowSendingWithoutReply: true}
 	}
 	err := g.queue.Do(ctx, func(ctx context.Context) error {
+		params.Document = &models.InputFileUpload{Filename: doc.Name, Data: bytes.NewReader(doc.Data)}
 		_, err := g.api.SendDocument(ctx, params)
 		return translate(err)
 	})

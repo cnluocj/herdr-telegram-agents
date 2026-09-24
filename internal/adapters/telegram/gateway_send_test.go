@@ -250,6 +250,28 @@ func TestSendDocumentToGeneralAndErrors(t *testing.T) {
 	}
 }
 
+func TestSendDocumentRetryUploadsAgain(t *testing.T) {
+	h := newHarness(t)
+	n := 0
+	h.api.on("sendDocument", func(url.Values) apiReply {
+		n++
+		if n == 1 {
+			return errReply(502, "Bad Gateway")
+		}
+		return okReply(map[string]any{"message_id": 7})
+	})
+	if err := h.gw.SendDocument(h.ctx, domain.Document{ThreadID: 42, Name: "diff.patch", Data: []byte("the whole diff")}); err != nil {
+		t.Fatal(err)
+	}
+	calls := h.api.callsOf("sendDocument")
+	if len(calls) != 2 {
+		t.Fatalf("sendDocument calls = %d, want a retry", len(calls))
+	}
+	if got := string(calls[1].files["document"].data); got != "the whole diff" {
+		t.Fatalf("retried document = %q, want the whole file again", got)
+	}
+}
+
 func TestSendAttachesKeyboardToLastPart(t *testing.T) {
 	h := newHarness(t)
 	n := 0
