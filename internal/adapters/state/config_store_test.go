@@ -148,3 +148,47 @@ func TestConfigStoreObserversOptional(t *testing.T) {
 		t.Fatalf("empty observers written:\n%s", raw)
 	}
 }
+
+func TestConfigStoreTranscriptFolders(t *testing.T) {
+	s := state.NewConfigStore(t.TempDir(), nil)
+	ctx := context.Background()
+	// Hand-edited folder lists load as written and survive a save (an
+	// /observers change rewrites the whole file).
+	edited := `{"version":1,"bot_token":"1:t","chat_id":-1001,"operator_ids":[7],` +
+		`"claude_projects_dirs":["~/.claude/projects","~/.ccs/instances/*/projects"],` +
+		`"codex_sessions_dirs":["~/.ccs/codex-instances/*/sessions"]}`
+	if err := os.WriteFile(s.Path(), []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.ClaudeProjectsDirs, ",") != "~/.claude/projects,~/.ccs/instances/*/projects" ||
+		strings.Join(got.CodexSessionsDirs, ",") != "~/.ccs/codex-instances/*/sessions" {
+		t.Fatalf("folders = %v / %v", got.ClaudeProjectsDirs, got.CodexSessionsDirs)
+	}
+	next, err := got.WithObserver(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(again.ClaudeProjectsDirs, ",") != "~/.claude/projects,~/.ccs/instances/*/projects" ||
+		strings.Join(again.CodexSessionsDirs, ",") != "~/.ccs/codex-instances/*/sessions" {
+		t.Fatalf("folders after save = %v / %v", again.ClaudeProjectsDirs, again.CodexSessionsDirs)
+	}
+	// Without them the keys stay out of the file.
+	if err := s.Save(ctx, sampleConfig()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(s.Path())
+	if strings.Contains(string(raw), "claude_projects_dirs") || strings.Contains(string(raw), "codex_sessions_dirs") {
+		t.Fatalf("empty folder lists written:\n%s", raw)
+	}
+}

@@ -66,6 +66,11 @@ type outbound struct {
 	// above which a transcript done post is sent collapsed (0 never).
 	meta func() bool
 	fold func() int
+	// screenLines reads posts.screen_lines: how many lines a done screen
+	// post carries. idleReply reads posts.idle_reply: a turn started from
+	// Telegram that Herdr ends as idle still gets its done post.
+	screenLines func() int
+	idleReply   func() bool
 
 	deb        *debouncer
 	threads    map[domain.Key]int
@@ -184,6 +189,8 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 	chrome := func() bool { return true }
 	meta := func() bool { return true }
 	fold := func() int { return defaultFoldLines }
+	screenLines := func() int { return doneLines }
+	idleReply := func() bool { return false }
 	if opts != nil {
 		paused = func() bool { return !opts.SyncEnabled() }
 		doneMode = opts.PostsDone
@@ -194,6 +201,8 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		chrome = opts.PostsChrome
 		meta = opts.PostsMeta
 		fold = opts.FoldAfter
+		screenLines = opts.ScreenLines
+		idleReply = opts.IdleReply
 	}
 	if live == nil {
 		live = func() []domain.Agent { return nil }
@@ -218,6 +227,8 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		chrome:       chrome,
 		meta:         meta,
 		fold:         fold,
+		screenLines:  screenLines,
+		idleReply:    idleReply,
 		log:          log,
 		deb:          newDebouncer(clock, screenSettle, log),
 		threads:      map[domain.Key]int{},
@@ -330,7 +341,8 @@ func (o *outbound) observeTurn(ev AgentEvent) {
 }
 
 // EndTurn runs when an agent has stayed idle for turnSettle: the open turn
-// ends with its ✅ and is dropped. An agent that moved on meanwhile keeps
+// ends with its ✅ and is dropped, and with posts.idle_reply a turn started
+// from Telegram gets its done post. An agent that moved on meanwhile keeps
 // its turn. Only fatal Telegram errors are returned.
 func (o *outbound) EndTurn(ctx context.Context, key domain.Key) error {
 	t, ok := o.turns[key]
@@ -344,7 +356,20 @@ func (o *outbound) EndTurn(ctx context.Context, key domain.Key) error {
 		return nil
 	}
 	delete(o.turns, key)
-	return o.finishTurn(ctx, key, t, "idle")
+	if err := o.finishTurn(ctx, key, t, "idle"); err != nil {
+		return err
+	}
+	// Herdr ends a turn watched in the focused tab as idle, never done, so
+	// no done post follows. With posts.idle_reply a prompt that came from
+	// the topic is still answered there, as if the agent had turned done;
+	// a turn whose start was never seen may still show the previous
+	// answer and is left alone.
+	if t.messageID == 0 || t.started.IsZero() || !o.idleReply() {
+		return nil
+	}
+	o.log.Debug("idle turn posted as done", slog.String("key", key.String()), slog.Int("message_id", t.messageID))
+	agent.Status = domain.StatusDone
+	return o.post(ctx, key, agent, false, t, true)
 }
 
 // finishTurn logs the end of a turn and pays the ✅ owed on its prompt.
@@ -514,6 +539,12 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force bool) error {
 			}
 		}
 	}
+	return o.post(ctx, key, agent, force, t, hasTurn)
+}
+
+// post is fire past the turn bookkeeping: agent is the view posted (EndTurn
+// passes an idle agent as done), t the turn it ended when hasTurn is set.
+func (o *outbound) post(ctx context.Context, key domain.Key, agent domain.Agent, force bool, t turn, hasTurn bool) error {
 	if o.paused() {
 		return o.skip(key, "sync_off")
 	}
@@ -533,7 +564,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force bool) error {
 	case domain.StatusBlocked:
 		lines = blockedLines
 	case domain.StatusDone:
-		lines = doneLines
+		lines = o.screenLines()
 	default:
 		delete(o.captures, key)
 		return o.skip(key, "not_blocked")

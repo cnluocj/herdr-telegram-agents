@@ -109,6 +109,13 @@ type Agent struct {
 	// source uses it to find the agent's own transcript. Empty when Herdr
 	// does not know it.
 	Cwd string
+	// SessionID is the agent's own session id when Herdr reports the
+	// session by id (Claude Code: the transcript's file name without
+	// ".jsonl"), so the reply source can open that exact transcript
+	// instead of the newest one in the project. Held in memory only: it
+	// is not part of Key and never written to the state files. Empty when
+	// Herdr reports no session or reports it by path.
+	SessionID string
 }
 
 // labelSeparator joins the workspace and the agent part of a label, the

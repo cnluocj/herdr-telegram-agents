@@ -109,6 +109,12 @@ func (o *Options) BlockedDelay() time.Duration { return o.Get().BlockedDelay() }
 // MinTurn is the shortest turn whose done screen is posted; zero posts all.
 func (o *Options) MinTurn() time.Duration { return o.Get().MinTurn() }
 
+// ScreenLines mirrors domain.Options.ScreenLines.
+func (o *Options) ScreenLines() int { return o.Get().ScreenLines() }
+
+// IdleReply mirrors domain.Options.IdleReply.
+func (o *Options) IdleReply() bool { return o.Get().IdleReply() }
+
 // InboxEnabled mirrors domain.Options.InboxEnabled.
 func (o *Options) InboxEnabled() bool { return o.Get().InboxEnabled() }
 

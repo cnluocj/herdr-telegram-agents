@@ -24,6 +24,18 @@ type Config struct {
 	ObserverIDs  []int64
 	LogLevel     string
 	ConfiguredAt time.Time
+	// ClaudeProjectsDirs lists the folders Claude Code keeps its
+	// per-project transcript folders in, for a setup that moved them with
+	// CLAUDE_CONFIG_DIR (one folder per account, say). Entries may start
+	// with "~", name environment variables and use glob patterns. Empty
+	// means the default: ~/.claude/projects, plus $CLAUDE_CONFIG_DIR/projects
+	// when the daemon runs with that variable set. Edited by hand in
+	// config.json; the setup wizard keeps it.
+	ClaudeProjectsDirs []string
+	// CodexSessionsDirs lists the folders Codex keeps its rollout files in
+	// (YYYY/MM/DD below each), the same way: empty means ~/.codex/sessions,
+	// plus $CODEX_HOME/sessions when the daemon runs with that variable.
+	CodexSessionsDirs []string
 }
 
 // Role is what a Telegram user may do with the bot.

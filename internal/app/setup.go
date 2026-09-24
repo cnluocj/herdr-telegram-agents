@@ -102,6 +102,9 @@ func (s *Setup) Run(ctx context.Context) (domain.Config, bool, error) {
 		OperatorIDs:  []int64{candidate.FromID},
 		LogLevel:     existing.LogLevel,
 		ConfiguredAt: s.clock.Now(),
+
+		ClaudeProjectsDirs: existing.ClaudeProjectsDirs,
+		CodexSessionsDirs:  existing.CodexSessionsDirs,
 	}
 	if err := s.store.Save(ctx, cfg); err != nil {
 		return domain.Config{}, false, fmt.Errorf("save config: %w", err)

@@ -283,10 +283,26 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	reconciler := app.NewReconciler(tg, hg, mappings, mapping, opts, clock, log)
 	capture := app.NewCapture(hg, registry.Live, clock, log)
 	inbox := state.NewInbox(env.StateDir, log)
+	replies := transcript.NewReader(transcript.Dirs{Claude: cfg.ClaudeProjectsDirs, Codex: cfg.CodexSessionsDirs}, system.Getenv, log)
+	logTranscriptRoots(replies, cfg, log)
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: transcript.NewReader(log), Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log)}, clock, log)
+		app.Services{Replies: replies, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log)}, clock, log)
 	presence := app.NewPresence(system.NewIdleSource(log), opts, clock, log)
 	d = app.NewDaemon(cfg, hg, tg, registry, reconciler, bridge, capture, state.NewConfigStore(env.ConfigDir, log), opts, presence, clock, log)
 	d.SetInbox(inbox)
 	return d, run, closeAll, nil
+}
+
+// logTranscriptRoots says once at start where done replies are read from:
+// the folders as configured and what they match right now.
+func logTranscriptRoots(r *transcript.Reader, cfg domain.Config, log *slog.Logger) {
+	claude, err := r.ClaudeRoots()
+	if err != nil {
+		log.Warn("claude transcript folders unusable", slog.Any("configured", cfg.ClaudeProjectsDirs), slog.String("err", err.Error()))
+	}
+	codex, err := r.CodexRoots()
+	if err != nil {
+		log.Warn("codex session folders unusable", slog.Any("configured", cfg.CodexSessionsDirs), slog.String("err", err.Error()))
+	}
+	log.Info("transcript folders", slog.Any("claude", claude), slog.Any("codex", codex))
 }

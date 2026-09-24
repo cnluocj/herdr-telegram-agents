@@ -29,6 +29,10 @@ type configFile struct {
 	ObserverIDs  []int64   `json:"observer_ids,omitempty"`
 	LogLevel     string    `json:"log_level,omitempty"`
 	ConfiguredAt time.Time `json:"configured_at"`
+	// The folder lists are omitted while empty, so a config that never
+	// set them keeps its exact shape.
+	ClaudeProjectsDirs []string `json:"claude_projects_dirs,omitempty"`
+	CodexSessionsDirs  []string `json:"codex_sessions_dirs,omitempty"`
 }
 
 // ConfigStore implements domain.ConfigStore over CONFIG_DIR/config.json.
@@ -76,6 +80,9 @@ func (s *ConfigStore) Load(context.Context) (domain.Config, error) {
 		ObserverIDs:  f.ObserverIDs,
 		LogLevel:     f.LogLevel,
 		ConfiguredAt: f.ConfiguredAt,
+
+		ClaudeProjectsDirs: f.ClaudeProjectsDirs,
+		CodexSessionsDirs:  f.CodexSessionsDirs,
 	}
 	if err := cfg.Validate(); err != nil {
 		return domain.Config{}, fmt.Errorf("config %s: %w", s.path, err)
@@ -100,6 +107,9 @@ func (s *ConfigStore) Save(_ context.Context, cfg domain.Config) error {
 		ObserverIDs:  cfg.ObserverIDs,
 		LogLevel:     cfg.LogLevel,
 		ConfiguredAt: cfg.ConfiguredAt,
+
+		ClaudeProjectsDirs: cfg.ClaudeProjectsDirs,
+		CodexSessionsDirs:  cfg.CodexSessionsDirs,
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {

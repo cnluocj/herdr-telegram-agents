@@ -280,7 +280,7 @@ func TestLastReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := mod.Add(3 * time.Second)
-	r := newReader(func() (string, error) { return home, nil }, func() time.Time { return now }, slog.New(slog.DiscardHandler))
+	r := newReader(func() (string, error) { return home, nil }, nil, func() time.Time { return now }, Dirs{}, slog.New(slog.DiscardHandler))
 	agent := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t1"}, Kind: "claude", Cwd: cwd}
 
 	reply, err := r.LastReply(context.Background(), agent)
@@ -295,7 +295,7 @@ func TestLastReply(t *testing.T) {
 	}
 
 	cases := map[string]domain.Agent{
-		"unsupported agent":       {Kind: "codex", Cwd: cwd},
+		"unsupported agent":       {Kind: "gemini", Cwd: cwd},
 		"no working directory":    {Kind: "claude"},
 		"no transcript directory": {Kind: "claude", Cwd: "/elsewhere"},
 	}
@@ -305,7 +305,7 @@ func TestLastReply(t *testing.T) {
 			t.Errorf("%s: err = %v", reason, err)
 		}
 	}
-	broken := newReader(func() (string, error) { return "", errors.New("no home") }, time.Now, nil)
+	broken := newReader(func() (string, error) { return "", errors.New("no home") }, nil, time.Now, Dirs{}, nil)
 	if _, err := broken.LastReply(context.Background(), agent); !errors.Is(err, domain.ErrNoReply) {
 		t.Errorf("home failure err = %v", err)
 	}

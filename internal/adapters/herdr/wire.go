@@ -78,13 +78,19 @@ type agentInfo struct {
 }
 
 // agentSessionInfo is Herdr's nullable identity tuple. It is converted to a
-// digest at the wire boundary; its values are never copied into the domain.
+// digest at the wire boundary for the key; of its values only an id-kind
+// session id is copied into the domain (Agent.SessionID, memory only) so
+// the reply source can open the agent's own transcript.
 type agentSessionInfo struct {
 	Source string `json:"source"`
 	Agent  string `json:"agent"`
 	Kind   string `json:"kind"`
 	Value  string `json:"value"`
 }
+
+// sessionKindID is the agentSessionInfo kind whose value is a session id
+// (Claude Code, Codex); the other kind, "path", names a session file.
+const sessionKindID = "id"
 
 type pongResult struct {
 	Type     string `json:"type"`
@@ -276,6 +282,7 @@ func toDomainAgent(a agentInfo) domain.Agent {
 		name = strings.TrimSpace(*a.Name)
 	}
 	key := domain.Key{PaneID: a.PaneID, TerminalID: a.TerminalID}
+	sessionID := ""
 	if a.AgentSession != nil {
 		key.SessionDigest = (domain.SessionTuple{
 			Source: a.AgentSession.Source,
@@ -283,6 +290,9 @@ func toDomainAgent(a agentInfo) domain.Agent {
 			Kind:   a.AgentSession.Kind,
 			Value:  a.AgentSession.Value,
 		}).Digest()
+		if a.AgentSession.Kind == sessionKindID {
+			sessionID = strings.TrimSpace(a.AgentSession.Value)
+		}
 	}
 	return domain.Agent{
 		Key:            key,
@@ -296,6 +306,7 @@ func toDomainAgent(a agentInfo) domain.Agent {
 		StateChangeSeq: a.StateChangeSeq,
 		Focused:        a.Focused,
 		Cwd:            a.Cwd,
+		SessionID:      sessionID,
 	}
 }
 

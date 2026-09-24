@@ -140,6 +140,8 @@ func TestOptionGroupsAndSpecs(t *testing.T) {
 		{OptionPostsPager, KindBool, "true", ""},
 		{OptionPostsBlockedDelay, KindChoice, "0", ChoiceSourceSeconds},
 		{OptionPostsMinSeconds, KindChoice, "0", ChoiceSourceSeconds},
+		{OptionPostsScreenLines, KindChoice, "12", ChoiceSourceScreenLines},
+		{OptionPostsIdleReply, KindBool, "false", ""},
 	}
 	if len(posts) != len(wantPosts) {
 		t.Fatalf("posts options = %+v", posts)
@@ -155,6 +157,9 @@ func TestOptionGroupsAndSpecs(t *testing.T) {
 	}
 	if posts[2].Validate == nil {
 		t.Error("posts.fold must carry validateLines")
+	}
+	if posts[8].Validate == nil {
+		t.Error("posts.screen_lines must carry validateScreenLines")
 	}
 	inbox := OptionsInGroup(GroupInbox)
 	wantInbox := []struct {
@@ -626,6 +631,63 @@ func TestFoldOption(t *testing.T) {
 	clean, dropped := SanitizeOptions(dirty, nil)
 	if len(dropped) != 0 || clean.String(OptionPostsFold) != "75" {
 		t.Errorf("sanitize kept %q, dropped %v", clean.String(OptionPostsFold), dropped)
+	}
+}
+
+func TestScreenLinesOption(t *testing.T) {
+	o := DefaultOptions()
+	if got := o.ScreenLines(); got != 12 {
+		t.Errorf("default ScreenLines = %d, want 12", got)
+	}
+	for value, want := range map[string]int{"1": 1, "50": 50, "75": 75, "200": 200, "garbage": 12, "0": 12, "201": 12} {
+		next, _ := o.With(OptionPostsScreenLines, value)
+		if got := next.ScreenLines(); got != want {
+			t.Errorf("ScreenLines(%q) = %d, want %d", value, got, want)
+		}
+	}
+	for _, v := range []string{"1", "12", "50", "75", "200"} {
+		next, _ := o.With(OptionPostsScreenLines, v)
+		if err := ValidateOptions(next, nil); err != nil {
+			t.Errorf("ValidateOptions(posts.screen_lines %q): %v", v, err)
+		}
+	}
+	for _, v := range []string{"0", "-1", "201", "x", "", "50 lines"} {
+		next, _ := o.With(OptionPostsScreenLines, v)
+		if err := ValidateOptions(next, nil); !errors.Is(err, ErrInvalidOption) {
+			t.Errorf("ValidateOptions(posts.screen_lines %q) = %v, want ErrInvalidOption", v, err)
+		}
+	}
+	spec, _ := LookupOption(OptionPostsScreenLines)
+	for _, tc := range []struct{ value, label, button string }{
+		{"12", "12 lines", "12"},
+		{"50", "50 lines", "50"},
+		{"garbage", "garbage", "garbage"},
+	} {
+		if got := ChoiceLabel(spec, tc.value); got != tc.label {
+			t.Errorf("ChoiceLabel(%q) = %q, want %q", tc.value, got, tc.label)
+		}
+		if got := ChoiceButton(spec, tc.value); got != tc.button {
+			t.Errorf("ChoiceButton(%q) = %q, want %q", tc.value, got, tc.button)
+		}
+	}
+	list, ok := StaticChoices(ChoiceSourceScreenLines)
+	if !ok || strings.Join(list, ",") != "12,25,50,100" {
+		t.Errorf("StaticChoices(screen_lines) = %v, %v", list, ok)
+	}
+	dirty, _ := o.With(OptionPostsScreenLines, "75")
+	clean, dropped := SanitizeOptions(dirty, nil)
+	if len(dropped) != 0 || clean.String(OptionPostsScreenLines) != "75" {
+		t.Errorf("sanitize kept %q, dropped %v", clean.String(OptionPostsScreenLines), dropped)
+	}
+}
+
+func TestIdleReplyOption(t *testing.T) {
+	o := DefaultOptions()
+	if o.IdleReply() {
+		t.Error("posts.idle_reply should default to off")
+	}
+	if on, _ := o.With(OptionPostsIdleReply, "true"); !on.IdleReply() {
+		t.Error("posts.idle_reply still off after With")
 	}
 }
 

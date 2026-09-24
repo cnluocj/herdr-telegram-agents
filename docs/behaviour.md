@@ -205,7 +205,9 @@ at DEBUG without screen text; a final failed read produces one WARN.
 When an agent turns 🏆 done the topic gets one silent post. What it holds is
 the `Done post` option of the Posts group:
 
-- **Screen** (default): the last 12 lines of the terminal, as a code block,
+- **Screen** (default): the last lines of the terminal (`Done screen lines`
+  in the Posts group, default 12; a longer screen is split into several
+  messages), as a code block,
   without Claude Code's input frame at the bottom (the two `─` rules with the
   empty `❯` row between them, the status line and the mode hint) while
   `Trim the input frame` in the Posts group is on, so the post ends on the
@@ -214,14 +216,13 @@ the `Done post` option of the Posts group:
   without that frame passes through unchanged. Because the cut happens
   after the read, a `/screen N` on an idle Claude Code pane may come back
   with fewer than N lines.
-- **Reply**: the agent's own last message, taken from the transcript Claude
-  Code writes for itself. Herdr does not say which session a pane runs, so
-  the daemon takes the pane's working directory, maps it to
-  `~/.claude/projects/<cwd with every non-alphanumeric character as "-">/`
-  and reads the newest `.jsonl` there from the end: the last text the agent
-  wrote after your last prompt, skipping tool calls, tool results and
-  subagent traffic. The text is posted as a code block, so Markdown shows as
-  the agent typed it.
+- **Reply**: the agent's own last message, taken from the transcript the
+  agent writes for itself. Claude Code and Codex are read; see
+  [Where transcripts are read](#where-transcripts-are-read) for the folders.
+  For Claude Code it is the last text the agent wrote after your last
+  prompt, skipping tool calls, tool results and subagent traffic; for Codex
+  the final message of the last completed turn (`task_complete`). The text
+  is posted as a code block, so Markdown shows as the agent typed it.
 - **Formatted**: the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -241,9 +242,11 @@ excluded) and how many output tokens it wrote (summed once per API
 response). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
-the status line shows. Claude Code only: a Codex pane, a pane without a
-working directory or one without a transcript directory posts as before
-and the log says why at debug (`turn meta unavailable`). In `Screen` mode
+the status line shows. A Codex line has the duration, the model and the
+turn's output tokens, never a file count: Codex edits through its own
+tools and its rollout names no edited files. A pane of another agent or
+one without a transcript posts as before and the log says why at debug
+(`turn meta unavailable`). In `Screen` mode
 the transcript is read for the line alone. A transcript last written
 before the turn's first `working` status belongs to an earlier turn (two
 Claude panes in one directory): its line is skipped and, in `Reply` /
@@ -259,14 +262,60 @@ reply as the agent wrote it, before rendering and before the phone wraps
 them: a list of 25 short items folds, three long paragraphs do not. `Off`
 never folds. `Screen` posts are never folded, whatever the option says.
 
-Limits worth knowing: two Claude Code panes in the same directory cannot be
-told apart, so the reply of the one that wrote last wins (the stale check
-above catches the case where the other pane wrote before this turn began);
-other agents (Codex, Pi, OpenCode) always get the screen; when no
-transcript or no text is found the daemon posts the screen and logs
-`reply source unavailable` with the reason. Blocked posts and `/screen` are
-never affected: the dialog with its buttons exists only on the screen, and
-neither carries the summary line or the fold.
+Limits worth knowing: other agents (Pi, OpenCode, …) always get the screen;
+a Codex turn that is still running, was interrupted or ended without a
+message has no reply; when no transcript or no text is found the daemon
+posts the screen and logs `reply source unavailable` with the reason.
+Blocked posts and `/screen` are never affected: the dialog with its
+buttons exists only on the screen, and neither carries the summary line or
+the fold.
+
+### Where transcripts are read
+
+Herdr reports the session id of a Claude Code or Codex pane (Herdr 0.9 and
+later, through its hooks). With it the daemon opens that session's own
+file:
+
+- **Claude Code**: `<projects folder>/<cwd slug>/<session id>.jsonl`, where
+  the slug is the working directory with every non-alphanumeric character
+  as `-`; when the session started in another directory, any project folder
+  holding that file. Without a session id, or when no folder holds it, the
+  newest `.jsonl` of the working directory across every projects folder is
+  read, and two Claude Code panes in the same directory cannot be told
+  apart: the one that wrote last wins (the stale check above catches the
+  case where the other pane wrote before this turn began).
+- **Codex**: `<sessions folder>/YYYY/MM/DD/rollout-<time>-<session id>.jsonl`,
+  day folders searched newest first. Without a session id there is no
+  reply: Codex keeps no per-project folders to guess from.
+
+The folders are two optional lists in `config.json`, edited by hand with
+the daemon stopped (the setup wizard keeps them):
+
+```json
+"claude_projects_dirs": ["~/.claude/projects", "~/.ccs/instances/*/projects"],
+"codex_sessions_dirs": ["~/.codex/sessions", "~/.ccs/codex-instances/*/sessions"]
+```
+
+Entries may start with `~`, name environment variables (`$VAR`, `${VAR}`)
+and use glob patterns; a pattern is matched again on every lookup, so a
+folder added later (a new account under a tool that gives every account
+its own `CLAUDE_CONFIG_DIR` or `CODEX_HOME`) is found without a restart.
+Without a list the default applies: `~/.claude/projects` plus
+`$CLAUDE_CONFIG_DIR/projects`, and `~/.codex/sessions` plus
+`$CODEX_HOME/sessions`, when the daemon itself runs with that variable. The
+daemon logs the folders it resolved at start (`transcript folders`).
+
+### Answered while you watch
+
+Herdr counts a turn that ends in the focused tab while the terminal has
+focus as seen: the agent turns idle instead of done, and no done post
+follows. `Answer Telegram prompts when seen` (Posts group, default off)
+changes that for prompts sent from Telegram: when such a turn has stayed
+idle for 5 s (see [Turns and reactions](#turns-and-reactions)) its done post
+is sent as if the agent had turned done, with the same mode, summary line,
+stale check and duplicate check. A turn typed in Herdr, or one whose
+`working` status the daemon never saw, is left alone. The log says `idle
+turn posted as done` at debug.
 
 ## Turns and reactions
 
@@ -336,14 +385,16 @@ The options today:
 | `Hold topic edits` | Quiet | Default on. While at the desk no topic is created, renamed, closed, reopened or given a new icon; each of those is a Telegram service message that rings the phone. Off keeps topic edits live while at the desk. |
 | `Screen posts` | Quiet | Default `Silent`. What happens to blocked and done screens while at the desk: `Silent` posts without a sound (Telegram still shows a silent banner), `Held` posts nothing until you leave, `Normal` posts as usual. |
 | `Re-announce on leaving` | Quiet | Default on. When you leave, the screen of every agent still waiting for an answer is posted again with a sound, once per question. Off: only agents that have no post at all yet are posted. |
-| `Done post` | Posts | Default `Screen`. What a topic receives when its agent finishes: `Screen` posts the last 12 terminal lines in monospace; `Reply` posts the agent's last message from its Claude Code transcript (`~/.claude/projects/<cwd slug>/`, newest session file) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. Falls back to `Screen` for non-Claude agents or when no reply is found, see [Done posts](#done-posts). |
-| `Turn summary line` | Posts | Default on. Every done post (`Screen`, `Reply` and `Formatted`) ends with one line from the agent's transcript: `⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens` (turn duration, model, distinct files edited, output tokens). Claude Code only; without a transcript the post ends as before and the log has `turn meta unavailable` at debug. A transcript written before the turn began is skipped. Off: no line and, in `Screen` mode, no transcript read. See [Done posts](#done-posts). |
+| `Done post` | Posts | Default `Screen`. What a topic receives when its agent finishes: `Screen` posts the last terminal lines (`Done screen lines`) in monospace; `Reply` posts the agent's last message from its Claude Code or Codex transcript (see [Where transcripts are read](#where-transcripts-are-read)) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. Falls back to `Screen` for other agents or when no reply is found, see [Done posts](#done-posts). |
+| `Turn summary line` | Posts | Default on. Every done post (`Screen`, `Reply` and `Formatted`) ends with one line from the agent's transcript: `⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens` (turn duration, model, distinct files edited, output tokens). Claude Code and Codex (no file count); without a transcript the post ends as before and the log has `turn meta unavailable` at debug. A transcript written before the turn began is skipped. Off: no line and, in `Screen` mode, no transcript read. See [Done posts](#done-posts). |
 | `Fold long replies after` | Posts | Default `20 lines`. A `Reply` or `Formatted` done post whose message part has more lines than this arrives collapsed in Telegram's expandable quote: the first lines and an arrow that opens the rest; the summary line stays visible under it. `Off` never folds; `Screen` posts are never folded. Any integer of lines up to 1000 can be typed into `options.json`. See [Done posts](#done-posts). |
 | `Trim the input frame` | Posts | Default on. Every screen post (done and blocked screens, `/screen`, `/screen all`, the tails of the Claude Code commands, the pager's six lines) loses Claude Code's input frame at the bottom: the `─` rule, the empty `❯` row, the second rule, the status line (`… │ main ✓ │ 14%: …`) and the mode hint (`⏵⏵ auto mode on (shift+tab to cycle)` or `? for shortcuts`). The cut walks up from the bottom and stops at the first line that is none of these, so a dialog and its options are never touched, a `❯` row with typed text is left alone and a screen without the frame (Codex, any other agent) passes through unchanged. The duplicate check runs after the cut, so a screen that differs only in the status line's clock is not posted twice. Off posts the screen as captured. |
 | `React to prompts` | Posts | Default off: prompts are delivered silently. On: 👀 on your message once the agent took the prompt, 👌 when that turn ends (done, or 5 s of idle). Telegram may ring for each reaction, which is why it is off. See [Turns and reactions](#turns-and-reactions). |
 | `Questions in the bot's chat` | Posts | Default on. A question from an agent is posted into its topic without a sound and sent to you in the private chat with the bot with a sound: the agent's name, the dialog's options or the last six screen lines, and a link to the post. Mute the group in Telegram and only questions ring. Off: the topic post rings, nothing goes to the private chat. Needs a private chat the bot may write to; see [Silence the group](#silence-the-group). |
 | `Question delay` | Posts | Default `Off`. With `5s` … `120s`: after the usual 1.5 s capture the blocked post waits that long more, is dropped when the agent left blocked meanwhile, starts over when a newer question arrived, and otherwise posts the better of the two captures (more options recognised, then the longer text). `Off` posts the first capture at 1.5 s. Any integer of seconds up to 3600 can be typed into `options.json`. See [Questions and buttons](#questions-and-buttons). |
 | `Skip short done posts` | Posts | Default `Off`. With `5s` … `120s`: the done post of a turn shorter than that is skipped (blocked time included; a turn whose start the daemon never saw posts). Blocked posts and reactions are unaffected. Any integer of seconds up to 3600 can be typed into `options.json`. See [Turns and reactions](#turns-and-reactions). |
+| `Done screen lines` | Posts | Default `12 lines`. How many lines from the bottom of the terminal a done post carries when it is a screen: `Screen` mode, or `Reply` and `Formatted` when the transcript is unavailable. A screen longer than one Telegram message is split into several. Blocked posts keep their 25 lines. Any integer of lines from 1 to 200 can be typed into `options.json`. |
+| `Answer Telegram prompts when seen` | Posts | Default off. On: a turn started by a message from its topic gets its done post even when Herdr ends it as idle (seen) rather than done, which it does for a turn that ends in the focused tab while the terminal has focus. See [Answered while you watch](#answered-while-you-watch). |
 | `Accept files` | Inbox | Default on. Photos, documents, voice notes, audio and video sent to a topic are saved to the inbox and the agent is prompted with the path. Off: such messages answer `⚠️ inbox is off (/options → Inbox)`. See [Inbox](#inbox). |
 | `Largest file` | Inbox | Default 20 MB, the most Telegram lets a bot download. A larger file answers `⚠️ file too big: <size> > <max>` before any download. Any integer of megabytes from 1 to 20 can be typed into `options.json`. |
 | `Delete files after` | Inbox | Default 7 days. Inbox files older than that are deleted once a day, at daemon start and when the option changes. `Off` keeps them. Any integer of days can be typed into `options.json`. |
@@ -357,7 +408,8 @@ Values are saved in `options.json` next to `config.json` (mode 0600) as
 "quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
 "posts.done": "screen", "posts.meta": true, "posts.fold": "20",
 "posts.chrome": true, "posts.reactions": false, "posts.pager": true,
-"posts.blocked_delay": "0", "inbox.enabled": true, "inbox.max_mb": "20",
+"posts.blocked_delay": "0", "posts.screen_lines": "12",
+"posts.idle_reply": false, "inbox.enabled": true, "inbox.max_mb": "20",
 "inbox.delete_after_days": "7", "icons.working": "⚡", "privacy.redact": true,
 "topics.delete_after_days": "30", "topics.notice_delay": "20", …}}`.
 Missing keys take their defaults and unknown keys survive a save. The file
@@ -551,7 +603,7 @@ in `config.json`:
 
 | File | Location | Content |
 |------|----------|---------|
-| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level |
+| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level, the optional transcript folders (`claude_projects_dirs`, `codex_sessions_dirs`, see [Where transcripts are read](#where-transcripts-are-read)) |
 | `mapping.json` | Herdr plugin state dir (`HERDR_PLUGIN_STATE_DIR`) | agent to topic mapping and the dashboard message id (`dashboard_message_id`); entries of exited agents stay until the topic cleanup deletes their topic, or beyond 500 entries |
 | `options.json` | config dir, mode 0600 | the `/options` choices |
 | `inbox/` | state dir, mode 0700, files 0600 | attachments sent to topics, swept daily after `Delete files after` |

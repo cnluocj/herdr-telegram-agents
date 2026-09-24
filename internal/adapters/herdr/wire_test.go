@@ -59,16 +59,20 @@ func TestToDomainAgentSession(t *testing.T) {
 	idSession := domain.SessionTuple{Source: "codex", Agent: "codex", Kind: "id", Value: "session-id-42"}
 	pathSession := domain.SessionTuple{Source: "claude-code", Agent: "claude", Kind: "path", Value: "/private/session/abc"}
 	tests := []struct {
-		name       string
-		json       string
-		wantDigest string
+		name          string
+		json          string
+		wantDigest    string
+		wantSessionID string
 	}{
 		{
-			name:       "kind id",
-			json:       `{"pane_id":"p1","terminal_id":"term-old","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
-			wantDigest: idSession.Digest(),
+			name:          "kind id",
+			json:          `{"pane_id":"p1","terminal_id":"term-old","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
+			wantDigest:    idSession.Digest(),
+			wantSessionID: "session-id-42",
 		},
 		{
+			// A path names a session file, not an id: it stays out of the
+			// domain.
 			name:       "kind path",
 			json:       `{"pane_id":"p2","terminal_id":"term-path","agent_session":{"source":"claude-code","agent":"claude","kind":"path","value":"/private/session/abc"}}`,
 			wantDigest: pathSession.Digest(),
@@ -84,9 +88,10 @@ func TestToDomainAgentSession(t *testing.T) {
 			wantDigest: "",
 		},
 		{
-			name:       "terminal changed",
-			json:       `{"pane_id":"p1","terminal_id":"term-new","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
-			wantDigest: idSession.Digest(),
+			name:          "terminal changed",
+			json:          `{"pane_id":"p1","terminal_id":"term-new","agent_session":{"source":"codex","agent":"codex","kind":"id","value":"session-id-42"}}`,
+			wantDigest:    idSession.Digest(),
+			wantSessionID: "session-id-42",
 		},
 	}
 	agents := make(map[string]domain.Agent, len(tests))
@@ -99,6 +104,9 @@ func TestToDomainAgentSession(t *testing.T) {
 			agent := toDomainAgent(info)
 			if agent.SessionDigest != tt.wantDigest {
 				t.Fatalf("SessionDigest = %q, want %q", agent.SessionDigest, tt.wantDigest)
+			}
+			if agent.SessionID != tt.wantSessionID {
+				t.Fatalf("SessionID = %q, want %q", agent.SessionID, tt.wantSessionID)
 			}
 			agents[tt.name] = agent
 		})

@@ -39,6 +39,10 @@ type PluginEnv struct {
 // Lookup mirrors os.LookupEnv so tests can inject an environment.
 type Lookup func(key string) (string, bool)
 
+// Getenv is os.Getenv for the adapters that take the environment as a
+// function, such as the transcript reader (CLAUDE_CONFIG_DIR, CODEX_HOME).
+func Getenv(key string) string { return os.Getenv(key) }
+
 // ReadEnv reads the real process environment.
 func ReadEnv() (PluginEnv, error) {
 	return ReadEnvFrom(os.LookupEnv, os.UserHomeDir)

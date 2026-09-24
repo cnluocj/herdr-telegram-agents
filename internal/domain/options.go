@@ -126,6 +126,16 @@ const (
 	// OptionPostsMinSeconds skips the done post of a turn shorter than
 	// this many seconds; "0" posts every done screen.
 	OptionPostsMinSeconds = "posts.min_seconds"
+	// OptionPostsScreenLines is how many lines from the bottom of the
+	// terminal a done screen post carries.
+	OptionPostsScreenLines = "posts.screen_lines"
+	// ChoiceSourceScreenLines is the static list of line counts offered by
+	// the panel for OptionPostsScreenLines (see ScreenLinesChoices).
+	ChoiceSourceScreenLines = "screen_lines"
+	// OptionPostsIdleReply posts the done post of a turn started from
+	// Telegram even when Herdr ends it as idle instead of done, which it
+	// does for a turn watched to its end in the focused tab.
+	OptionPostsIdleReply = "posts.idle_reply"
 	// ChoiceSourceSeconds is the static list of second counts offered by
 	// the panel for the two delay options (see SecondsChoices).
 	ChoiceSourceSeconds = "seconds"
@@ -263,7 +273,7 @@ func buildOptionSpecs() []OptionSpec {
 			Key:         OptionPostsDone,
 			Group:       GroupPosts,
 			Title:       "Done post",
-			Description: "What is posted when an agent finishes: Screen is the last 12 lines of the terminal, Reply is the agent's last message from its transcript, Formatted renders that message with bold, lists, links and code.",
+			Description: "What is posted when an agent finishes: Screen is the last lines of the terminal (Done screen lines), Reply is the agent's last message from its transcript (Claude Code, Codex), Formatted renders that message with bold, lists, links and code.",
 			Kind:        KindChoice,
 			Default:     string(DoneScreen),
 			Choices:     ChoiceSourceDone,
@@ -272,7 +282,7 @@ func buildOptionSpecs() []OptionSpec {
 			Key:         OptionPostsMeta,
 			Group:       GroupPosts,
 			Title:       "Turn summary line",
-			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code only; without a transcript the post ends as before.",
+			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code and Codex (no file count); without a transcript the post ends as before.",
 			Kind:        KindBool,
 			Default:     "true",
 		},
@@ -329,6 +339,24 @@ func buildOptionSpecs() []OptionSpec {
 			Default:     "0",
 			Choices:     ChoiceSourceSeconds,
 			Validate:    validateSeconds,
+		},
+		{
+			Key:         OptionPostsScreenLines,
+			Group:       GroupPosts,
+			Title:       "Done screen lines",
+			Description: "How many lines from the bottom of the terminal a done post carries when it is a screen: Screen mode, or Reply and Formatted when the transcript is unavailable. A long screen is split into several messages.",
+			Kind:        KindChoice,
+			Default:     "12",
+			Choices:     ChoiceSourceScreenLines,
+			Validate:    validateScreenLines,
+		},
+		{
+			Key:         OptionPostsIdleReply,
+			Group:       GroupPosts,
+			Title:       "Answer Telegram prompts when seen",
+			Description: "Herdr counts a turn that ends in the focused tab while its terminal has focus as seen: the agent turns idle, not done, and no done post follows. On: a turn started by a message from its topic still gets its done post when it ends that way. Off keeps Herdr's rule.",
+			Kind:        KindBool,
+			Default:     "false",
 		},
 		{
 			Key:         OptionInboxEnabled,
@@ -473,6 +501,21 @@ var linesChoices = []string{"0", "10", "20", "40"}
 // maxLines bounds a hand-edited fold threshold.
 const maxLines = 1000
 
+// screenLinesChoices is the list the panel offers for
+// OptionPostsScreenLines.
+var screenLinesChoices = []string{"12", "25", "50", "100"}
+
+// defaultScreenLines is the done screen length used when the option holds
+// something unusable; maxScreenLines bounds a hand-edited value.
+const (
+	defaultScreenLines = 12
+	maxScreenLines     = 200
+)
+
+// ScreenLinesChoices returns the done screen lengths the panel offers:
+// 12, 25, 50 and 100 lines.
+func ScreenLinesChoices() []string { return append([]string(nil), screenLinesChoices...) }
+
 // defaultFoldAfter is the threshold in force when the stored value cannot
 // be parsed; it equals the OptionPostsFold default.
 const defaultFoldAfter = 20
@@ -511,6 +554,8 @@ func StaticChoices(name string) ([]string, bool) {
 		return NoticeChoices(), true
 	case ChoiceSourceLines:
 		return LinesChoices(), true
+	case ChoiceSourceScreenLines:
+		return ScreenLinesChoices(), true
 	}
 	return nil, false
 }
@@ -547,6 +592,14 @@ func validateSeconds(value string) error {
 	return nil
 }
 
+func validateScreenLines(value string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 1 || n > maxScreenLines {
+		return fmt.Errorf("%q is not a line count between 1 and %d: %w", value, maxScreenLines, ErrInvalidOption)
+	}
+	return nil
+}
+
 func validateLines(value string) error {
 	n, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || n < 0 || n > maxLines {
@@ -562,6 +615,12 @@ func validateLines(value string) error {
 // other sources show the value itself.
 func ChoiceLabel(spec OptionSpec, value string) string {
 	switch spec.Choices {
+	case ChoiceSourceScreenLines:
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return value
+		}
+		return fmt.Sprintf("%d lines", n)
 	case ChoiceSourceLines:
 		n, err := strconv.Atoi(strings.TrimSpace(value))
 		switch {
@@ -629,6 +688,12 @@ func ChoiceLabel(spec OptionSpec, value string) string {
 // the value itself.
 func ChoiceButton(spec OptionSpec, value string) string {
 	switch spec.Choices {
+	case ChoiceSourceScreenLines:
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return value
+		}
+		return strconv.Itoa(n)
 	case ChoiceSourceLines:
 		n, err := strconv.Atoi(strings.TrimSpace(value))
 		switch {
@@ -930,6 +995,20 @@ func (o Options) BlockedDelay() time.Duration { return o.seconds(OptionPostsBloc
 // MinTurn is the shortest turn whose done screen is posted; zero posts
 // every done screen (also for an unparsable value).
 func (o Options) MinTurn() time.Duration { return o.seconds(OptionPostsMinSeconds) }
+
+// ScreenLines is how many lines a done screen post carries; a value that
+// does not parse or is out of range gives the default of 12.
+func (o Options) ScreenLines() int {
+	n, err := strconv.Atoi(strings.TrimSpace(o.String(OptionPostsScreenLines)))
+	if err != nil || n < 1 || n > maxScreenLines {
+		return defaultScreenLines
+	}
+	return n
+}
+
+// IdleReply reports whether a turn started from Telegram gets its done
+// post when Herdr ends it as idle.
+func (o Options) IdleReply() bool { return o.Bool(OptionPostsIdleReply) }
 
 // PostsChrome reports whether Claude Code's input frame is cut from the
 // bottom of screen posts.
