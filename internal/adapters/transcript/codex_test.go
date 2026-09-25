@@ -25,6 +25,8 @@ const (
 	codexStarted2 = `{"timestamp":"2026-09-24T01:12:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2","started_at":1790212320}}`
 	codexAborted2 = `{"timestamp":"2026-09-24T01:12:05.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-2"}}`
 	codexEmpty2   = `{"timestamp":"2026-09-24T01:12:05.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-2","last_agent_message":null,"started_at":1790212320,"completed_at":1790212325}}`
+	codexCount1a  = `{"timestamp":"2026-09-24T01:10:21.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":40000,"total_tokens":40100},"model_context_window":258400}}}`
+	codexCount1b  = `{"timestamp":"2026-09-24T01:10:27.100Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":71478,"total_tokens":73573},"model_context_window":258400}}}`
 	codexNoise    = `{"timestamp":"2026-09-24T01:10:21.000Z","type":"event_msg","payload":{"type":"token_count","info":{}}}`
 )
 
@@ -39,7 +41,7 @@ func writeRollout(t *testing.T, path string, lines ...string) {
 }
 
 func TestLastCodexReplyIn(t *testing.T) {
-	complete := []string{codexMeta, codexStarted1, codexContext1, codexTokens1a, codexNoise, codexMessage1, codexTokens1b, codexDone1}
+	complete := []string{codexMeta, codexStarted1, codexContext1, codexTokens1a, codexNoise, codexCount1a, codexMessage1, codexTokens1b, codexCount1b, codexNoise, codexDone1}
 	tests := []struct {
 		name    string
 		lines   []string
@@ -70,12 +72,12 @@ func TestLastCodexReplyIn(t *testing.T) {
 			if text != tt.want {
 				t.Errorf("text = %q, want %q", text, tt.want)
 			}
-			wantMeta := domain.TurnMeta{Model: "gpt-6-sol", OutputTokens: 2500,
+			wantMeta := domain.TurnMeta{Model: "gpt-6-sol", OutputTokens: 2500, ContextTokens: 73573, ContextWindow: 258400,
 				Started: time.Unix(1790212216, 0).UTC(), Ended: time.Unix(1790212287, 0).UTC()}
 			if !reflect.DeepEqual(meta, wantMeta) {
 				t.Errorf("meta = %+v, want %+v", meta, wantMeta)
 			}
-			if line := meta.Line(); line != "⏱ 1 min · gpt-6-sol · ↑ 2.5k tokens" {
+			if line := meta.Line(); line != "⏱ 1 min · gpt-6-sol · ↑ 2.5k tokens · 🧠 74k/258k (28%)" {
 				t.Errorf("summary line = %q", line)
 			}
 			if stats.lines == 0 || stats.bytes == 0 {

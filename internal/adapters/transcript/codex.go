@@ -52,6 +52,14 @@ type codexRecord struct {
 		TurnTokenUsage   struct {
 			OutputTokens int `json:"output_tokens"`
 		} `json:"turn_token_usage"`
+		// Info is set on the token_count event: the last request's
+		// usage and the model's context window.
+		Info *struct {
+			LastTokenUsage struct {
+				TotalTokens int `json:"total_tokens"`
+			} `json:"last_token_usage"`
+			ModelContextWindow int `json:"model_context_window"`
+		} `json:"info"`
 	} `json:"payload"`
 }
 
@@ -164,8 +172,9 @@ func subdirsNewestFirst(dir string) []string {
 // met from the end must be its task_complete. A task_started met first is
 // a turn still running, a turn_aborted one that was interrupted; neither
 // has a reply. After the message the walk goes on to the turn's start for
-// the model (turn_context) and the output tokens (the newest
-// token_usage_record carries the turn's running total).
+// the model (turn_context), the output tokens (the newest
+// token_usage_record carries the turn's running total) and the context
+// occupancy (the newest token_count event).
 func lastCodexReplyIn(path string, budget int64) (string, domain.TurnMeta, scanStats, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -179,7 +188,7 @@ func lastCodexReplyIn(path string, budget int64) (string, domain.TurnMeta, scanS
 	var stats scanStats
 	var meta domain.TurnMeta
 	var text, turnID string
-	var haveText, haveTokens bool
+	var haveText, haveTokens, haveContext bool
 	visit := func(line []byte) error {
 		stats.lines++
 		line = bytes.TrimSpace(line)
@@ -222,6 +231,9 @@ func lastCodexReplyIn(path string, budget int64) (string, domain.TurnMeta, scanS
 			meta.Model = p.Model
 		case rec.Type == "token_usage_record" && !haveTokens:
 			meta.OutputTokens, haveTokens = p.TurnTokenUsage.OutputTokens, true
+		case rec.Type == "event_msg" && p.Type == "token_count" && !haveContext && p.Info != nil && p.Info.LastTokenUsage.TotalTokens > 0:
+			meta.ContextTokens, meta.ContextWindow = p.Info.LastTokenUsage.TotalTokens, p.Info.ModelContextWindow
+			haveContext = true
 		case rec.Type == "event_msg" && p.Type == "task_started":
 			return errStop
 		}

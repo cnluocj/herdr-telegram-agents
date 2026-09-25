@@ -98,15 +98,21 @@ type Reply struct {
 
 // TurnMeta is what an agent's transcript records about one turn: the
 // model that answered, when the turn started (the operator's prompt) and
-// ended (the newest assistant record), the files it edited and how many
-// output tokens it wrote. Every field may be empty; Line renders whatever
-// is known.
+// ended (the newest assistant record), the files it edited, how many
+// output tokens it wrote and how full the context is after the turn.
+// Every field may be empty; Line renders whatever is known.
 type TurnMeta struct {
 	Model        string
 	Started      time.Time
 	Ended        time.Time
 	Files        []string
 	OutputTokens int
+	// ContextTokens is the prompt size of the turn's last request: what
+	// the conversation occupies in the model's context right now.
+	ContextTokens int
+	// ContextWindow is the model's context size when the transcript
+	// records it (Codex); zero when unknown (Claude Code).
+	ContextWindow int
 }
 
 // Ring is one push to the operator's phone outside Telegram (Bark): the

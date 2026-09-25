@@ -8,8 +8,9 @@ import (
 )
 
 // Line renders the turn summary shown under a done post: the known parts
-// joined by " · " in the order duration, model, files, output tokens, for
-// example "⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens". A part whose
+// joined by " · " in the order duration, model, files, output tokens,
+// context, for example "⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens ·
+// 🧠 126k". A part whose
 // value is unknown is left out; nothing known is the empty string.
 func (m TurnMeta) Line() string {
 	var parts []string
@@ -28,7 +29,23 @@ func (m TurnMeta) Line() string {
 	if m.OutputTokens > 0 {
 		parts = append(parts, "↑ "+formatTokens(m.OutputTokens)+" tokens")
 	}
+	if ctx := m.contextPart(); ctx != "" {
+		parts = append(parts, ctx)
+	}
 	return strings.Join(parts, " · ")
+}
+
+// contextPart renders the context occupancy: "🧠 126k" when only the
+// size is known, "🧠 74k/258k (29%)" when the window is known too.
+func (m TurnMeta) contextPart() string {
+	if m.ContextTokens <= 0 {
+		return ""
+	}
+	if m.ContextWindow <= 0 {
+		return "🧠 " + formatTokens(m.ContextTokens)
+	}
+	pct := int(math.Round(float64(m.ContextTokens) * 100 / float64(m.ContextWindow)))
+	return fmt.Sprintf("🧠 %s/%s (%d%%)", formatTokens(m.ContextTokens), formatTokens(m.ContextWindow), pct)
 }
 
 // Duration is Ended minus Started; false when either is unknown or Ended

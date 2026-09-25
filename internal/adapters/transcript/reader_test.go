@@ -70,6 +70,29 @@ func TestLastReplyInFixtures(t *testing.T) {
 	}
 }
 
+func TestLastReplyInContextTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ctx.jsonl")
+	lines := []string{
+		`{"type":"user","timestamp":"2026-09-07T10:00:00.000Z","message":{"role":"user","content":"go"}}`,
+		`{"type":"assistant","timestamp":"2026-09-07T10:00:05.000Z","requestId":"req-1","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":40}}}`,
+		`{"type":"user","timestamp":"2026-09-07T10:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
+		`{"type":"assistant","isSidechain":true,"timestamp":"2026-09-07T10:00:07.000Z","requestId":"req-side","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"side"}],"usage":{"input_tokens":5,"cache_read_input_tokens":9000,"output_tokens":7}}}`,
+		`{"type":"assistant","timestamp":"2026-09-07T10:00:10.000Z","requestId":"req-2","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":2441,"cache_read_input_tokens":123811,"output_tokens":325}}}`,
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, turn, _, err := lastReplyIn(path, defaultMaxScan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The newest main-chain request is the context; the sidechain and the
+	// older request are not.
+	if got := turn.meta().ContextTokens; got != 126254 {
+		t.Errorf("ContextTokens = %d, want 126254", got)
+	}
+}
+
 func TestLastReplyInMeta(t *testing.T) {
 	text, turn, _, err := lastReplyIn(filepath.Join("testdata", "meta.jsonl"), defaultMaxScan)
 	if err != nil {

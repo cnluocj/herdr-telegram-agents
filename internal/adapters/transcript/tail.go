@@ -45,7 +45,10 @@ type record struct {
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
 		Usage   struct {
-			OutputTokens int `json:"output_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -72,8 +75,10 @@ type turnStats struct {
 	ended        time.Time
 	files        []string
 	outputTokens int
-	seenRequests map[string]bool
-	complete     bool
+	// contextTokens is the prompt size of the newest request.
+	contextTokens int
+	seenRequests  map[string]bool
+	complete      bool
 }
 
 // editTools are the Claude Code tools whose input names a file they
@@ -84,11 +89,12 @@ var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, 
 // duplicates dropped.
 func (t turnStats) meta() domain.TurnMeta {
 	return domain.TurnMeta{
-		Model:        t.model,
-		Started:      t.started,
-		Ended:        t.ended,
-		Files:        uniqueReversed(t.files),
-		OutputTokens: t.outputTokens,
+		Model:         t.model,
+		Started:       t.started,
+		Ended:         t.ended,
+		Files:         uniqueReversed(t.files),
+		OutputTokens:  t.outputTokens,
+		ContextTokens: t.contextTokens,
 	}
 }
 
@@ -112,14 +118,19 @@ func uniqueReversed(paths []string) []string {
 
 // absorb folds one non-sidechain assistant record into the stats: the
 // newest timestamp is the end of the turn, the first model met is the
-// model, output tokens count once per request id, and every edited path
-// is kept in the order met (newest first).
+// model, the newest request's input (cache reads and writes included) is
+// the context size, output tokens count once per request id, and every
+// edited path is kept in the order met (newest first).
 func (t *turnStats) absorb(rec record) {
 	if t.ended.IsZero() {
 		t.ended = parseStamp(rec.Timestamp)
 	}
 	if t.model == "" {
 		t.model = rec.Message.Model
+	}
+	if t.contextTokens == 0 {
+		u := rec.Message.Usage
+		t.contextTokens = u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens
 	}
 	if rec.RequestID == "" {
 		t.outputTokens += rec.Message.Usage.OutputTokens
