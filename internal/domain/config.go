@@ -41,6 +41,11 @@ type Config struct {
 	// also rings the phone there, with a link to the Telegram post. Empty
 	// means no Bark. A secret like the token: never logged.
 	BarkURL string
+	// ClaudeContextWindow is the context size of the Claude Code model in
+	// use, in tokens (200000, or 1000000 with the 1M window). Claude Code's
+	// transcript does not record it; set, the summary line shows the
+	// context as a percentage of it. Zero shows the size alone.
+	ClaudeContextWindow int
 }
 
 // Role is what a Telegram user may do with the bot.
@@ -139,6 +144,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("%w: chat_id %d is not a supergroup id", ErrNotConfigured, c.ChatID)
 	case len(c.OperatorIDs) == 0:
 		return fmt.Errorf("%w: operator_ids is empty", ErrNotConfigured)
+	case c.ClaudeContextWindow < 0:
+		return fmt.Errorf("%w: claude_context_window %d is negative", ErrNotConfigured, c.ClaudeContextWindow)
 	}
 	return nil
 }

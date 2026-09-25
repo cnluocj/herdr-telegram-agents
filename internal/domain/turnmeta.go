@@ -78,9 +78,12 @@ func formatTurnDuration(d time.Duration) string {
 }
 
 // formatTokens renders a token count: "954" under a thousand, "4.6k"
-// under ten thousand (one decimal) and "46k" above.
+// under ten thousand (one decimal), "46k" above and "1M" or "1.5M" from a
+// million on (a context window).
 func formatTokens(n int) string {
 	switch {
+	case n >= 999_500:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
 	case n < 1000:
 		return fmt.Sprintf("%d", n)
 	case n < 9950:

@@ -193,6 +193,30 @@ func TestConfigStoreTranscriptFolders(t *testing.T) {
 	}
 }
 
+func TestConfigStoreClaudeContextWindow(t *testing.T) {
+	s := state.NewConfigStore(t.TempDir(), nil)
+	ctx := context.Background()
+	cfg := sampleConfig()
+	cfg.ClaudeContextWindow = 1_000_000
+	if err := s.Save(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load(ctx)
+	if err != nil || got.ClaudeContextWindow != 1_000_000 {
+		t.Fatalf("claude context window = %d, %v", got.ClaudeContextWindow, err)
+	}
+	if err := s.Save(ctx, sampleConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(s.Path()); strings.Contains(string(raw), "claude_context_window") {
+		t.Fatalf("zero claude_context_window written:\n%s", raw)
+	}
+	cfg.ClaudeContextWindow = -1
+	if err := s.Save(ctx, cfg); err == nil {
+		t.Fatal("negative claude_context_window saved")
+	}
+}
+
 func TestConfigStoreBarkURL(t *testing.T) {
 	s := state.NewConfigStore(t.TempDir(), nil)
 	ctx := context.Background()

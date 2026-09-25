@@ -64,6 +64,9 @@ type Dirs struct {
 	// Codex lists Codex's sessions folders (see
 	// domain.Config.CodexSessionsDirs).
 	Codex []string
+	// ClaudeWindow is the Claude Code context size (see
+	// domain.Config.ClaudeContextWindow); zero leaves it unknown.
+	ClaudeWindow int
 }
 
 // Reader implements domain.ReplySource for Claude Code and Codex.
@@ -98,7 +101,7 @@ func newReader(home func() (string, error), getenv func(string) string, now func
 	if getenv == nil {
 		getenv = func(string) string { return "" }
 	}
-	dirs = Dirs{Claude: append([]string(nil), dirs.Claude...), Codex: append([]string(nil), dirs.Codex...)}
+	dirs = Dirs{Claude: append([]string(nil), dirs.Claude...), Codex: append([]string(nil), dirs.Codex...), ClaudeWindow: dirs.ClaudeWindow}
 	return &Reader{home: home, getenv: getenv, now: now, log: log, maxScan: defaultMaxScan, dirs: dirs, rollouts: map[string]string{}}
 }
 
@@ -199,6 +202,11 @@ func (r *Reader) lastClaudeReply(agent domain.Agent) (domain.Reply, error) {
 		slog.Int("candidates", candidates), slog.String("chosen", path), slog.Int64("age_ms", age.Milliseconds()))
 	text, turn, stats, err := lastReplyIn(path, r.maxScan)
 	meta := turn.meta()
+	// A context larger than the configured window means the window is
+	// wrong (a 1M session with 200000 set): the size stands alone then.
+	if w := r.dirs.ClaudeWindow; w > 0 && meta.ContextTokens > 0 && meta.ContextTokens <= w {
+		meta.ContextWindow = w
+	}
 	turnDuration, _ := meta.Duration()
 	r.log.Debug("transcript scanned",
 		slog.String("chosen", filepath.Base(path)), slog.Int("lines", stats.lines),

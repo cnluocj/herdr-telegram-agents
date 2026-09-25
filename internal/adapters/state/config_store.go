@@ -34,6 +34,8 @@ type configFile struct {
 	ClaudeProjectsDirs []string `json:"claude_projects_dirs,omitempty"`
 	CodexSessionsDirs  []string `json:"codex_sessions_dirs,omitempty"`
 	BarkURL            string   `json:"bark_url,omitempty"`
+	// ClaudeContextWindow is omitted while zero, like the fields above.
+	ClaudeContextWindow int `json:"claude_context_window,omitempty"`
 }
 
 // ConfigStore implements domain.ConfigStore over CONFIG_DIR/config.json.
@@ -85,6 +87,8 @@ func (s *ConfigStore) Load(context.Context) (domain.Config, error) {
 		ClaudeProjectsDirs: f.ClaudeProjectsDirs,
 		CodexSessionsDirs:  f.CodexSessionsDirs,
 		BarkURL:            f.BarkURL,
+
+		ClaudeContextWindow: f.ClaudeContextWindow,
 	}
 	if err := cfg.Validate(); err != nil {
 		return domain.Config{}, fmt.Errorf("config %s: %w", s.path, err)
@@ -113,6 +117,8 @@ func (s *ConfigStore) Save(_ context.Context, cfg domain.Config) error {
 		ClaudeProjectsDirs: cfg.ClaudeProjectsDirs,
 		CodexSessionsDirs:  cfg.CodexSessionsDirs,
 		BarkURL:            cfg.BarkURL,
+
+		ClaudeContextWindow: cfg.ClaudeContextWindow,
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {

@@ -70,16 +70,20 @@ func TestLastReplyInFixtures(t *testing.T) {
 	}
 }
 
+// ctxLines is one Claude Code turn of two requests and a sidechain
+// record, each carrying input usage; the newest main-chain request holds
+// 126254 tokens of context.
+var ctxLines = []string{
+	`{"type":"user","timestamp":"2026-09-07T10:00:00.000Z","message":{"role":"user","content":"go"}}`,
+	`{"type":"assistant","timestamp":"2026-09-07T10:00:05.000Z","requestId":"req-1","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":40}}}`,
+	`{"type":"user","timestamp":"2026-09-07T10:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
+	`{"type":"assistant","isSidechain":true,"timestamp":"2026-09-07T10:00:07.000Z","requestId":"req-side","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"side"}],"usage":{"input_tokens":5,"cache_read_input_tokens":9000,"output_tokens":7}}}`,
+	`{"type":"assistant","timestamp":"2026-09-07T10:00:10.000Z","requestId":"req-2","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":2441,"cache_read_input_tokens":123811,"output_tokens":325}}}`,
+}
+
 func TestLastReplyInContextTokens(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ctx.jsonl")
-	lines := []string{
-		`{"type":"user","timestamp":"2026-09-07T10:00:00.000Z","message":{"role":"user","content":"go"}}`,
-		`{"type":"assistant","timestamp":"2026-09-07T10:00:05.000Z","requestId":"req-1","message":{"model":"claude-opus-5-5","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}],"usage":{"input_tokens":3,"cache_creation_input_tokens":900,"cache_read_input_tokens":120000,"output_tokens":40}}}`,
-		`{"type":"user","timestamp":"2026-09-07T10:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
-		`{"type":"assistant","isSidechain":true,"timestamp":"2026-09-07T10:00:07.000Z","requestId":"req-side","message":{"model":"claude-haiku-4-5","content":[{"type":"text","text":"side"}],"usage":{"input_tokens":5,"cache_read_input_tokens":9000,"output_tokens":7}}}`,
-		`{"type":"assistant","timestamp":"2026-09-07T10:00:10.000Z","requestId":"req-2","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":2441,"cache_read_input_tokens":123811,"output_tokens":325}}}`,
-	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(strings.Join(ctxLines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, turn, _, err := lastReplyIn(path, defaultMaxScan)
@@ -90,6 +94,39 @@ func TestLastReplyInContextTokens(t *testing.T) {
 	// older request are not.
 	if got := turn.meta().ContextTokens; got != 126254 {
 		t.Errorf("ContextTokens = %d, want 126254", got)
+	}
+}
+
+func TestLastReplyClaudeWindow(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/Users/op/Projects/demo"
+	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ctx.jsonl"), []byte(strings.Join(ctxLines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t1"}, Kind: "claude", Cwd: cwd}
+	for _, tc := range []struct {
+		name   string
+		window int
+		want   int
+	}{
+		{"unset", 0, 0},
+		{"1M window", 1_000_000, 1_000_000},
+		// 126254 tokens cannot fit a 100k window: the setting is wrong,
+		// so the size stands alone instead of a percentage past 100.
+		{"window smaller than the context", 100_000, 0},
+	} {
+		r := newReader(func() (string, error) { return home, nil }, nil, time.Now, Dirs{ClaudeWindow: tc.window}, nil)
+		reply, err := r.LastReply(context.Background(), agent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply.Meta.ContextTokens != 126254 || reply.Meta.ContextWindow != tc.want {
+			t.Errorf("%s: context = %d/%d, want 126254/%d", tc.name, reply.Meta.ContextTokens, reply.Meta.ContextWindow, tc.want)
+		}
 	}
 }
 

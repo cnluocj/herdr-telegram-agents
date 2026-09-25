@@ -313,7 +313,7 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	reconciler := app.NewReconciler(tg, hg, mappings, mapping, opts, clock, log)
 	capture := app.NewCapture(hg, registry.Live, clock, log)
 	inbox := state.NewInbox(env.StateDir, log)
-	replies := transcript.NewReader(transcript.Dirs{Claude: cfg.ClaudeProjectsDirs, Codex: cfg.CodexSessionsDirs}, system.Getenv, log)
+	replies := transcript.NewReader(transcript.Dirs{Claude: cfg.ClaudeProjectsDirs, Codex: cfg.CodexSessionsDirs, ClaudeWindow: cfg.ClaudeContextWindow}, system.Getenv, log)
 	logTranscriptRoots(replies, cfg, log)
 	bell := buildBell(cfg, log)
 	log.Info("bark", slog.Bool("on", bell != nil))

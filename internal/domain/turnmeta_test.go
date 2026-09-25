@@ -29,6 +29,8 @@ func TestTurnMetaLine(t *testing.T) {
 		{"zero tokens", TurnMeta{OutputTokens: 0, Model: "claude-haiku-4-5-20251001"}, "haiku-4-5"},
 		{"context without window", TurnMeta{OutputTokens: 1100, ContextTokens: 126254}, "↑ 1.1k tokens · 🧠 126k"},
 		{"context with window", TurnMeta{Model: "gpt-6-sol", ContextTokens: 73573, ContextWindow: 258400}, "gpt-6-sol · 🧠 74k/258k (28%)"},
+		{"1M window", TurnMeta{ContextTokens: 126254, ContextWindow: 1_000_000}, "🧠 126k/1M (13%)"},
+		{"millions", TurnMeta{OutputTokens: 1_500_000}, "↑ 1.5M tokens"},
 		{"window without context", TurnMeta{ContextWindow: 258400}, ""},
 		{"nothing known", TurnMeta{}, ""},
 	} {

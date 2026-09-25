@@ -275,7 +275,7 @@ func TestSetupKeepsExistingConfig(t *testing.T) {
 	f := newSetup(t)
 	existing := domain.Config{Version: 1, BotToken: "old", ChatID: -5, ChatTitle: "Old", OperatorIDs: []int64{3}, LogLevel: "debug",
 		ClaudeProjectsDirs: []string{"~/.ccs/instances/*/projects"}, CodexSessionsDirs: []string{"~/.ccs/codex-instances/*/sessions"},
-		BarkURL: "https://api.day.app/key"}
+		BarkURL: "https://api.day.app/key", ClaudeContextWindow: 1_000_000}
 	f.store.Set(existing)
 	f.ui.confirms = []bool{false}
 	r := result(t, f.run(context.Background()))
@@ -306,6 +306,9 @@ func TestSetupKeepsExistingConfig(t *testing.T) {
 	}
 	if r.cfg.BarkURL != "https://api.day.app/key" {
 		t.Fatalf("reconfigure lost the bark endpoint: %q", r.cfg.BarkURL)
+	}
+	if r.cfg.ClaudeContextWindow != 1_000_000 {
+		t.Fatalf("reconfigure lost the claude context window: %d", r.cfg.ClaudeContextWindow)
 	}
 }
 

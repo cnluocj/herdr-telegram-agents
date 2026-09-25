@@ -242,8 +242,10 @@ excluded), how many output tokens it wrote (summed once per API
 response) and how full the context is after the turn (`🧠 126k`: the
 input of the turn's last request, cache reads and writes included, so you
 can tell when to `/compact`; Codex records its window too and shows
-`🧠 74k/258k (28%)`, Claude Code does not, so its line shows the size
-alone). A part the transcript does not know is left out; nothing known
+`🧠 74k/258k (28%)`; Claude Code does not, so its line shows the size
+alone unless `claude_context_window` in `config.json` names the window,
+`200000` or `1000000` with the 1M context, and then `🧠 126k/1M (13%)`;
+a context larger than the configured window shows the size alone). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
 the status line shows. A Codex line has the duration, the model and the
@@ -673,7 +675,7 @@ in `config.json`:
 
 | File | Location | Content |
 |------|----------|---------|
-| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level, the optional transcript folders (`claude_projects_dirs`, `codex_sessions_dirs`, see [Where transcripts are read](#where-transcripts-are-read)), the optional Bark endpoint (`bark_url`, see [Ringing the phone through Bark](#ringing-the-phone-through-bark)) |
+| `config.json` | Herdr plugin config dir (`HERDR_PLUGIN_CONFIG_DIR`), mode 0600 | bot token, chat id and title, operator ids, observer ids (`observer_ids`, written by `/observers`), log level, the optional transcript folders (`claude_projects_dirs`, `codex_sessions_dirs`, see [Where transcripts are read](#where-transcripts-are-read)), the optional Bark endpoint (`bark_url`, see [Ringing the phone through Bark](#ringing-the-phone-through-bark)), the optional Claude Code context window (`claude_context_window`, see [Done posts](#done-posts)) |
 | `mapping.json` | Herdr plugin state dir (`HERDR_PLUGIN_STATE_DIR`) | agent to topic mapping and the dashboard message id (`dashboard_message_id`); entries of exited agents stay until the topic cleanup deletes their topic, or beyond 500 entries |
 | `options.json` | config dir, mode 0600 | the `/options` choices |
 | `inbox/` | state dir, mode 0700, files 0600 | attachments sent to topics, swept daily after `Delete files after` |
